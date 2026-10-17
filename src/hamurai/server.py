@@ -5,7 +5,7 @@ import sys
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -18,9 +18,10 @@ from pydantic import BaseModel
 
 from hamurai.client import HamuraiClient, HamuraiError, SessionExpired
 from hamurai.config import ConfigError, load_config
-from hamurai.matcher import Labels, ProposalSet, propose_all
+from hamurai.matcher import Labels, LineProposal, ProposalSet, propose_all, propose_line
 from hamurai.models import Category, Transaction, VatCode
 from hamurai.seeding import DraftEntry, Resolution, UnresolvedError, build_draft, resolve, seedable
+from hamurai.statement import LeftOut, Statement, StatementError, read_statement
 from hamurai.suggestions import SUGGESTIONS_PATH, Entry, SuggestionsFileError, load, save
 
 SESSION_EXPIRED = (
@@ -29,6 +30,8 @@ SESSION_EXPIRED = (
 )
 
 READ_ONLY = ToolAnnotations(read_only_hint=True)
+# How long after a statement's last booking date its collection may come.
+COLLECTION_WINDOW = timedelta(days=45)
 
 
 class ProposeResult(BaseModel):
@@ -48,6 +51,13 @@ class FlaggedCounterparty(BaseModel):
     key: str
     name: str | None
     pairs: list[PairCount]
+
+
+class SplitProposal(BaseModel):
+    collection: Transaction
+    lines: list[LineProposal]
+    left_out: list[LeftOut]
+    total_cents: int
 
 
 class SeedSummary(BaseModel):
@@ -94,6 +104,7 @@ class State:
     suggestions_path: Path
     proposed: dict[int, Transaction] = field(default_factory=dict)
     draft: list[DraftEntry] | None = None
+    split: tuple[Transaction, Statement] | None = None
     categories: list[Category] | None = None
     vat_codes: list[VatCode] | None = None
 
@@ -123,6 +134,14 @@ def tool_errors() -> Generator[None]:
         raise ToolError("Could not reach Hamurai. Check the connection and try again.") from None
 
 
+def statement_file(text: str) -> Path:
+    """A path as typed or dragged into the terminal: quoted, or with escaped spaces."""
+    text = text.strip()
+    if len(text) > 1 and text[0] == text[-1] and text[0] in "'\"":
+        text = text[1:-1]
+    return Path(text.replace("\\ ", " ")).expanduser()
+
+
 def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PATH) -> MCPServer:
     state = State(client=client, suggestions_path=suggestions_path)
     mcp = MCPServer("hamurai")
@@ -146,7 +165,8 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
         """Propose a category and VAT code for each unbooked transaction in the period.
 
         Never writes anything. Proposals come in groups: confident, uncertain, unknown, and
-        skipped (partly booked, never touched). Amounts are in cents.
+        skipped (partly booked, never touched). Amounts are in cents. A credit card collection
+        is split with propose_split, not booked as one line.
         """
         if end_date < start_date:
             raise ToolError("end_date is before start_date")
@@ -159,6 +179,55 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
         if not suggestions.entries and not suggestions.patterns:
             hint = "There are no suggestions yet: run seed_suggestions first."
         return ProposeResult(proposals=proposals, hint=hint)
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def propose_split(statement_path: str) -> SplitProposal:
+        """Propose how to split a credit card collection, from the card statement's CSV.
+
+        Never writes anything. Finds the one unbooked bank transaction the statement's
+        purchases add up to, and proposes a category and VAT code for each line. The card
+        payment row and refunded purchases are left out and listed. Amounts are in cents.
+
+        For an unknown merchant, propose the category, and choose the VAT code by the user's
+        rule: "Geen / Vrijgesteld" for a merchant located outside the EU, the 21% code for one
+        inside the EU. Show the confident lines as one table and the rest one at a time. Every
+        line is booked, so correct a line rather than leave it out; then call book_split.
+        """
+        state.split = None
+        try:
+            statement = read_statement(statement_file(statement_path))
+        except StatementError as exc:
+            raise ToolError(str(exc)) from None
+        start = statement.first_booking_date
+        end = statement.last_booking_date + COLLECTION_WINDOW
+        with tool_errors():
+            suggestions = load(state.suggestions_path)
+            transactions = await client.transactions(start, end)
+            labels = await state.labels()
+        candidates = [
+            t
+            for t in transactions
+            if t.number_of_reconciliations == 0 and t.amount_cents == statement.total_cents
+        ]
+        if not candidates:
+            raise ToolError(
+                f"No unbooked transaction of {statement.total_cents} cents between {start} "
+                f"and {end}; nothing is booked."
+            )
+        if len(candidates) > 1:
+            listed = "; ".join(f"{t.entry_date} {t.description}" for t in candidates)
+            raise ToolError(
+                f"More than one unbooked transaction of {statement.total_cents} cents: "
+                f"{listed}. Nothing is booked."
+            )
+        [collection] = candidates
+        state.split = (collection, statement)
+        return SplitProposal(
+            collection=collection,
+            lines=[propose_line(line, suggestions, labels) for line in statement.lines],
+            left_out=statement.left_out,
+            total_cents=statement.total_cents,
+        )
 
     @mcp.tool(annotations=READ_ONLY)
     async def seed_suggestions(ctx: Context) -> SeedSummary:
