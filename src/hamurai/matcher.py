@@ -91,6 +91,21 @@ def _from_entry(
 ) -> Proposal:
     current = entry.current
     counts = entry.counts
+    if entry.always_ask:
+        history = "; ".join(
+            f"{count}× {labels.pair(pair)}"
+            for pair, count in sorted(counts.items(), key=lambda item: -item[1])
+        )
+        return Proposal(
+            transaction=transaction,
+            confidence=Confidence.UNCERTAIN,
+            category_id=current.category_id,
+            vat_code_id=current.vat_code_id,
+            evidence=(
+                f"{match}, always ask; last booked as {labels.pair(current)} "
+                f"on {entry.bookings[-1].date}; history {history}"
+            ),
+        )
     older = sorted(
         ((count, pair) for pair, count in counts.items() if pair != current),
         key=lambda item: -item[0],

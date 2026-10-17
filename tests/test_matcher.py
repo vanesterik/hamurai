@@ -138,3 +138,19 @@ def test_learned_booking_feeds_the_matcher():
     suggestions.record(tx(1, iban=IBAN), booking(1, 1, 10))
 
     assert propose(unbooked(iban=IBAN), suggestions, LABELS).confidence == Confidence.CONFIDENT
+
+
+def test_always_ask_is_uncertain_with_the_latest_pair_and_history():
+    mixed = entry(
+        IBAN, "Own account", (2, 10, "2026-01-01"), (3, 11, "2026-02-01"), (1, 10, "2026-03-01")
+    )
+    mixed.always_ask = True
+
+    proposal = propose(unbooked(iban=IBAN), Suggestions(entries=[mixed]), LABELS)
+
+    assert proposal.confidence == Confidence.UNCERTAIN
+    assert (proposal.category_id, proposal.vat_code_id) == (10, 20)
+    assert proposal.evidence == (
+        "IBAN match, always ask; last booked as 4500 Kantoorkosten / 21% hoog on 2026-03-01; "
+        "history 3× 4500 Kantoorkosten / 21% hoog; 3× 4600 Reiskosten / 21% hoog"
+    )

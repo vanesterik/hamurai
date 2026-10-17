@@ -67,10 +67,10 @@ The matcher looks for a transaction's counterparty in the suggestions in this or
 | Level | When |
 |---|---|
 | `confident` | An IBAN match. |
-| `uncertain` | A match on name or description only. |
+| `uncertain` | A match on name or description only, **or** any match on a counterparty marked *always ask*. |
 | `unknown` | No match at all. |
 
-**The latest choice wins.** Each entry has a current category and VAT code, and that is what the matcher proposes. When the user approves a booking that differs from it, the entry switches to the new pair, and the next quarter proposes the new pair as `confident`. The older counts are kept for the evidence, so a changed counterparty reads like "IBAN match, now 4600 / 21% VAT (1×, since 2026-10-17); before that 14× 4500". Mixed histories from before seeding don't reach the matcher, because the user resolves them during seeding. *(The user's decision. It replaces the earlier rule that a mixed history counts as `uncertain`.)*
+**The latest choice wins.** Each entry has a current category and VAT code, and that is what the matcher proposes. When the user approves a booking that differs from it, the entry switches to the new pair, and the next quarter proposes the new pair as `confident`. The older counts are kept for the evidence, so a changed counterparty reads like "IBAN match, now 4600 / 21% VAT (1×, since 2026-10-17); before that 14× 4500". Mixed histories from before seeding reach the matcher only as *always ask* counterparties (see below), because the user resolves them during seeding. *(The user's decision. It replaces the earlier rule that a mixed history counts as `uncertain`.)*
 
 An entry in the suggestions holds its current category and VAT code, plus a count per pair it has ever been booked to, so a change stays visible. It also keeps the booking IDs it learned from, so an undo knows which count to take back, even after the server has been reconnected. *(Builder's call.)*
 
@@ -87,7 +87,11 @@ Claude uses its own judgment only on `unknown` transactions, by picking a catego
 1. `client` fetches the full transaction history, page by page.
 2. `suggestions` groups the booked transactions by counterparty (IBAN first, then name) and records category, VAT code, count and last-seen date per group.
 3. Counterparties booked under more than one category or VAT code are flagged.
-4. The user reviews a summary once and resolves the flagged ones by picking one category and VAT code for each. The other counts for that counterparty are dropped, so it starts out `confident`. Only then is `data/suggestions.yaml` written. *(Builder's call.)*
+4. The user reviews a summary once and resolves each flagged counterparty in one of two ways. Only then is `data/suggestions.yaml` written.
+   - **One pair:** one category and VAT code from its history. The other counts for that counterparty are dropped, so it starts out `confident`. *(Builder's call.)*
+   - **Always ask:** for a counterparty with no single right category, such as the user's own account (salary and current-account transfers), the tax office or payment requests. Its whole history is kept and it is marked `always_ask`: it is always proposed as `uncertain`, with the latest pair as the proposal and the whole history as evidence, so it is never part of the confident table. Learning keeps the mark. *(The user's decision, after seeding the real history flagged 47 counterparties, about 14 of them of this kind.)*
+
+   For each flagged pair, the summary gives its count and when it was last used, so a VAT rate that changed over time (6% to 9%, or 21% to reverse charge) can be decided on the current one.
 
 A transaction split over more than one booking (`numberOfReconciliations > 1`) is left out of seeding. *(Builder's call.)*
 
@@ -107,7 +111,7 @@ After seeding, the suggestions only grow through bookings the user approves.
 | Tool | What it does | Returns |
 |---|---|---|
 | `seed_suggestions()` | Reads the full history and builds the suggestions **without writing them**. | A summary per counterparty, with the inconsistent ones flagged. |
-| `save_suggestions(resolutions)` | Writes `data/suggestions.yaml`, using the user's decisions for the flagged counterparties. | How many entries were written. |
+| `save_suggestions(resolutions)` | Writes `data/suggestions.yaml`, using the user's decision for each flagged counterparty: `{key, category_id, vat_code_id}` or `{key, always_ask: true}`. | How many entries were written. |
 | `list_categories()`, `list_vat_codes()` | Lets Claude look up IDs and names, for transactions with no match. | ID, code, name. |
 | `propose_bookings(start_date, end_date)` | Fetches the period and runs the matcher. **Writes nothing.** | Four groups (`confident`, `uncertain`, `unknown`, `skipped`). Each line has transaction ID, date, amount, description, counterparty, proposed category and VAT code, and evidence. |
 | `book(bookings)` | Takes a list of `{transaction_id, category_id, vat_code_id}`. Books each line as a manual booking and updates the suggestions for each one that succeeds. | A result per line: the booking ID, or why it failed. |

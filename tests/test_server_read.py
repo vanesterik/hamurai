@@ -118,9 +118,9 @@ async def test_seed_reports_flagged_and_writes_nothing(client, fake, path):
     assert (summary["entries"], summary["bookings"]) == (2, 5)
     [flagged] = summary["flagged"]
     assert flagged["key"] == f"iban:{OTHER_IBAN}"
-    assert [(p["label"], p["count"]) for p in flagged["pairs"]] == [
-        ("4500 Kantoorkosten / 21% hoog", 2),
-        ("4600 Reiskosten / 21% hoog", 1),
+    assert [(p["label"], p["count"], p["last_seen"]) for p in flagged["pairs"]] == [
+        ("4500 Kantoorkosten / 21% hoog", 2, "2026-04-04"),
+        ("4600 Reiskosten / 21% hoog", 1, "2026-04-05"),
     ]
     assert not path.exists()
 
@@ -274,3 +274,23 @@ async def test_propose_bookings_with_null_fields(client, fake, path):
 
     assert not result.is_error, text(result)
     assert len(result.structured_content["proposals"]["unknown"]) == 1
+
+
+async def test_save_suggestions_with_always_ask(client, fake, path):
+    booked_history(fake)
+    fake.transactions.append(
+        make_transaction(10, iban=OTHER_IBAN, name="Mixed", entry_date="2026-07-02")
+    )
+
+    async with connected(client, path) as session:
+        await session.call_tool("seed_suggestions", {})
+        saved = await session.call_tool(
+            "save_suggestions", {"resolutions": [{"key": f"iban:{OTHER_IBAN}", "always_ask": True}]}
+        )
+        result = await session.call_tool(
+            "propose_bookings", {"start_date": "2026-07-01", "end_date": "2026-09-30"}
+        )
+
+    assert not saved.is_error, text(saved)
+    [proposal] = result.structured_content["proposals"]["uncertain"]
+    assert "always ask" in proposal["evidence"]

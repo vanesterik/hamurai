@@ -41,6 +41,7 @@ class PairCount(BaseModel):
     vat_code_id: int
     label: str
     count: int
+    last_seen: date
 
 
 class FlaggedCounterparty(BaseModel):
@@ -200,6 +201,7 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
                             vat_code_id=pair.vat_code_id,
                             label=labels.pair(pair),
                             count=count,
+                            last_seen=max(b.date for b in d.bookings if b.pair == pair),
                         )
                         for pair, count in sorted(
                             Entry(bookings=d.bookings).counts.items(), key=lambda item: -item[1]
@@ -214,6 +216,10 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
     @mcp.tool()
     async def save_suggestions(resolutions: list[Resolution]) -> SaveSummary:
         """Write the seeded suggestions, with the user's choice for each flagged counterparty.
+
+        A choice is either one category_id and vat_code_id from its history, or always_ask:
+        true, for a counterparty with no single right category (it is then always proposed as
+        uncertain, with its history as evidence).
 
         Refuses when the suggestions file already exists: it is seeded only once.
         """

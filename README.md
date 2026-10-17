@@ -54,11 +54,14 @@ After changing `.env` or the code, reconnect the server from `/mcp`: it reads `.
 - how many counterparties and bookings it found;
 - `skipped_split`: transactions split over several bookings, left out;
 - `skipped_other`: transactions booked onto something other than a category, such as an invoice, left out;
-- `flagged`: counterparties booked under more than one category or VAT code, each with how often each one was used.
+- `flagged`: counterparties booked under more than one category or VAT code, each with how often each one was used and when it was last used.
 
-Tell Claude which category and VAT code each flagged counterparty should get:
+For each flagged counterparty, tell Claude one of two things:
 
-> For the flagged ones, take the one used most each time, except the travel agency: that's 4600 Reiskosten.
+- **One category and VAT code** from its history. From then on it is proposed as `confident`.
+- **Always ask**, for a counterparty with no single right category, such as your own account, the tax office or a payment-request service. It keeps its whole history and is always proposed as `uncertain`, one at a time, never in the confident table.
+
+> Take the one used most each time, but the current VAT rate where it changed. Always ask for my own account, the Belastingdienst and Tikkie.
 
 `save_suggestions` then writes `data/suggestions.yaml`. Open it: one entry per counterparty, one line per learned booking. It is meant to stay readable and can be edited by hand.
 

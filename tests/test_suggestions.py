@@ -183,3 +183,24 @@ def test_save_is_atomic(tmp_path, monkeypatch):
 
     assert path.read_text() == original
     assert [p.name for p in tmp_path.iterdir()] == ["suggestions.yaml"]
+
+
+def test_always_ask_survives_learning_and_the_file(tmp_path):
+    suggestions = learned(10)
+    suggestions.entries[0].always_ask = True
+    suggestions.record(tx(2, day=2), booking(102, 2, 11))
+    path = tmp_path / "suggestions.yaml"
+
+    save(suggestions, path)
+
+    [entry] = load(path).entries
+    assert entry.always_ask is True
+    assert len(entry.bookings) == 2
+
+
+def test_always_ask_is_left_out_of_the_file_when_false(tmp_path):
+    path = tmp_path / "suggestions.yaml"
+
+    save(learned(10), path)
+
+    assert "always_ask" not in path.read_text()

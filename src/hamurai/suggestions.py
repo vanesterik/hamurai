@@ -49,6 +49,8 @@ class LearnedBooking(BaseModel):
 class Entry(BaseModel):
     iban: str | None = None
     name: str | None = None
+    # Never confident: for counterparties without one right category, such as an own account.
+    always_ask: bool = False
     bookings: list[LearnedBooking]
 
     @property
@@ -164,9 +166,11 @@ def load(path: Path = SUGGESTIONS_PATH) -> Suggestions:
 def save(suggestions: Suggestions, path: Path = SUGGESTIONS_PATH) -> None:
     """Write the suggestions atomically: a crash never leaves a half-written file."""
     # Lists of plain values (each learned booking) become one-line flow mappings.
-    text = yaml.safe_dump(
-        suggestions.model_dump(), sort_keys=False, default_flow_style=None, allow_unicode=True
-    )
+    data = suggestions.model_dump()
+    for entry in data["entries"]:
+        if not entry["always_ask"]:
+            del entry["always_ask"]
+    text = yaml.safe_dump(data, sort_keys=False, default_flow_style=None, allow_unicode=True)
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         "w", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False

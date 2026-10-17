@@ -104,3 +104,17 @@ def test_resolve_refuses_unknown_key():
 
     with pytest.raises(ValueError, match="iban:NOPE"):
         resolve(draft, [Resolution(key="iban:NOPE", category_id=10, vat_code_id=20)])
+
+
+def test_always_ask_keeps_the_whole_history():
+    draft = build_draft(history((IBAN, "Mixed", 10), (IBAN, "Mixed", 11), (IBAN, "Mixed", 10)))
+
+    [entry] = resolve(draft, [Resolution(key=f"iban:{IBAN}", always_ask=True)]).entries
+
+    assert entry.always_ask is True
+    assert len(entry.bookings) == 3
+
+
+def test_resolution_needs_a_pair_or_always_ask():
+    with pytest.raises(ValueError, match="always_ask"):
+        Resolution(key=f"iban:{IBAN}", category_id=10)
