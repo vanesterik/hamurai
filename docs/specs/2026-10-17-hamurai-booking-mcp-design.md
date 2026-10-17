@@ -58,7 +58,7 @@ Principles:
 - Only `client` touches the network, and only `suggestions` touches the file.
 - The cookie never appears in logs, errors or tool output.
 - Every booking is sent as a manual booking (`suggestionAccepted: false`) with an explicit `vatCodeId`.
-- The credit card split will be a new `statement` unit plus a split call in `client`, without changing the units above.
+- The credit card split adds a `statement` unit, which reads the card statement, and an update call in `client`. The units above change only where the split needs them to (see "Second story").
 
 ## Matching
 
@@ -189,20 +189,92 @@ That's acceptable for something that runs once. `seed_suggestions` runs those ca
 
 ## Second story: the credit card split
 
-The same design covers it, but it's built as a second story. It waits on the split request being recorded.
+Issue #3. The card company's monthly collection shows up on the bank account as one transaction. In the user's words, it is one transaction made of several smaller ones: the lines of the card statement. Each line is matched and booked like any other transaction, against the same suggestions. Only the flow differs: the lines come from a file, and together they book one bank transaction.
 
-The card company's monthly collection shows up on the bank account as one transaction. The user supplies the card company's CSV, with these columns: `Accountnummer, Kaartnummer, Naam op kaart, Transactiedatum, Boekingsdatum, Omschrijving, Valuta, Bedrag, Koers, Bedrag in EUR`.
+### The statement
 
-- Amounts use a decimal comma (`"-12,99"`), and the account number field starts with `'`.
-- Refunds appear as positive rows.
-- Amounts come from `Bedrag in EUR`. Foreign-currency rows are already converted.
-- The statement period is by `Boekingsdatum`.
-- The rows add up to the amount of the collection, which identifies the matching bank transaction. Splitting is refused when the totals differ.
+The user downloads the statement as a CSV from the bank that issues the card, and drags it into the Claude Code prompt, which pastes its path. The tool reads the file itself. *(The user's decision: no copying into `data/`, which stays one place a statement may be kept.)* The file is parsed in code, not passed through the conversation, so the amounts arrive exactly and the card's identifying columns never reach tool output.
 
-Still open for that story:
+The columns are `Accountnummer, Kaartnummer, Naam op kaart, Transactiedatum, Boekingsdatum, Omschrijving, Valuta, Bedrag, Koers, Bedrag in EUR`.
 
-- **The split request has not been recorded.** The next time the user splits a credit card collection in Hamurai, it gets recorded with a fetch/XHR recorder that logs only write calls (method, path, request body, response status and body), never headers or cookies.
-- **The VAT treatment of foreign services on the card** (possibly reverse charge) needs input from the booking history or from the accountant.
+- A line is its `Transactiedatum`, `Omschrijving` and `Bedrag in EUR`. Foreign-currency rows are already converted, so `Valuta`, `Bedrag` and `Koers` are not used.
+- `Accountnummer`, `Kaartnummer` and `Naam op kaart` are read past and never kept, returned or logged.
+- The file is comma-separated UTF-8 without a byte order mark, with CRLF line ends and quoted fields. Blank lines occur (one follows the first row) and are skipped. Dates are `YYYY-MM-DD`. *(Checked on a real statement, 2026-10-17, by its format only.)*
+- Amounts use a decimal comma (`"-12,99"`) and are turned into integer cents without going through a float. Purchases are negative. A thousands dot (`"-1.234,56"`) wasn't seen but is accepted. *(Builder's call.)*
+- The account number field starts with `'`.
+- **The card payment row is left out.** The statement opens with the previous collection arriving on the card account, as a positive row described as `BETALING ONTVANGEN - DANK U`. It isn't a purchase: the purchases alone add up to the collection. Rows whose `Omschrijving` starts with `BETALING ONTVANGEN` are left out of the lines and listed as left out.
+- **A refunded purchase is left out, together with its refund.** Sometimes a purchase is followed by a refund for the same amount, and the two cancel out. Neither is booked: there is no use in keeping track of costs that were refunded *(the user's decision)*. A refund is paired with a purchase of exactly the opposite amount, preferring one with the same `Omschrijving`. Both are listed as left out. *(The pairing is the builder's call.)*
+- Any other positive row is refused, with the whole statement: a refund without a matching purchase in the same file (a partial refund, or one for an earlier statement), or one whose candidate purchases come from more than one merchant, none with the refund's own `Omschrijving`. A refund is never booked by a guess.
+- A file without these columns is refused with a message naming the missing ones, never quoting a row.
+
+**One file is one collection.** All the lines of the file together make up one collection. A statement covers a period by `Boekingsdatum`, and the user exports one statement per file. *(Builder's call.)*
+
+### Finding the collection
+
+The total of the lines, in cents, is the amount of the collection. The lines are the rows left once the payment row and any refunded pairs are left out. The tool fetches the bank transactions from the earliest `Boekingsdatum` to 45 days after the latest *(builder's call)* and looks for an unbooked transaction (`numberOfReconciliations` 0) with exactly that amount.
+
+- One match: that's the collection.
+- No match: refused, with the file's total, and nothing is booked. This includes a collection that is already partly or fully booked: partly booked transactions are still never touched.
+- More than one match: refused, listing the candidates by date and description.
+
+**The first story's tools are left alone.** Until it is split, the collection is an ordinary unbooked transaction, so `propose_bookings` lists it. The card company is already marked *always ask* in the suggestions, so the collection is always `uncertain` and never part of the confident table: Claude points to `propose_split` for it instead of proposing one booking. *(Builder's call.)*
+
+### Matching a line
+
+A line is matched as a transaction without an IBAN: its counterparty name is the `Omschrijving`, normalised the way names are now, and then the patterns are tried against the `Omschrijving`.
+
+**A name match on a card line is `confident`**, unlike a name match on a bank transaction, because for a card line the merchant is the only key there is. *Always ask* still makes it `uncertain`, and a pattern match stays `uncertain`. *(Builder's call.)*
+
+For an unknown merchant Claude proposes the category, and the VAT code by **the user's rule: a merchant located outside the EU gets "Geen", one inside the EU gets "Hoog 21%"**, judged from the description. The tool's description tells Claude this rule.
+
+### Proposing and booking
+
+The two new tools follow the first story's approval rules: one writes nothing, the other writes only what the user approved.
+
+1. `propose_split(statement_path)` reads the file, finds the collection and matches each line. **It writes nothing.** It returns the collection (ID, date, amount, description) and the lines, numbered in file order, each with date, description, amount, confidence, proposed category and VAT code, and evidence.
+2. Claude shows the confident lines as one table and goes through the uncertain and unknown ones one at a time, as in a quarter's session. A split is all or nothing, so a struck line is corrected rather than left out.
+3. `book_split(transaction_id, lines)` takes the collection's ID and every line exactly once, as `{line, category_id, vat_code_id}`. Before it sends anything it checks that:
+   - the collection and its lines come from the latest `propose_split` in this server run (the lines are kept from that call; the file is not read again),
+   - every line is listed exactly once,
+   - every category and VAT code ID is in Hamurai's lists,
+   - the collection, fetched again, is still unbooked.
+4. For each line, in file order, it sends two requests, as the web app does:
+   1. **Create**: the existing booking request, with the line's category and VAT code. Hamurai gives the new booking the collection's whole unbooked remainder.
+   2. **Update**: the line's amount in cents, the category and VAT code again, the line's `Omschrijving` as the booking's description *(the user's decision, so each booking names its merchant in Hamurai)*, and the collection's date as the entry date, as when splitting by hand.
+5. Once every line is booked, each one is learned under its merchant name, with the line's `Transactiedatum` as the date. Nothing is learned from a split that didn't complete.
+
+**All or nothing.** A split that stops partway leaves a booking holding the whole remainder under one category, which makes the collection look fully booked. So when any request fails, `book_split` stops, deletes every booking it created in this call (including one created but not yet updated), and reports what happened.
+
+- If a delete fails too, or the session has expired, the answer lists the booking IDs left behind, to be removed with `undo_booking` or in the web app.
+- A booking request is never retried. When a create gets no answer, its booking may or may not exist: the known bookings are deleted, and the answer says to check the collection in Hamurai, where `propose_bookings` lists it as `skipped` if something was left.
+
+The answer lists each line's booking ID. `undo_booking` works on them as it does now, one booking at a time, and undoing a whole split means undoing each of its bookings.
+
+### What the split adds to the API
+
+Recorded from the web app on 2026-10-17, splitting a real collection by hand into five lines:
+
+- `POST /api/v2/administrations/{admin}/reconciliations` (the existing create) on an unbooked or partly booked transaction gives the new booking the transaction's whole unbooked remainder.
+- `POST /api/v2/administrations/{admin}/reconciliations/{bookingId}` updates a booking. Body: `{"amount", "generalLedgerAccountId", "vatCodeId", "description", "entryDate"}`, with `amount` a signed integer in **cents** (`-1299` for −€12,99) and `entryDate` as `YYYY-MM-DD`. It answers `200` with the booking, in the same shape as the create's answer, with `amountInCents` set to the new amount.
+- A booking made without `vatCodeId` got the category's default VAT code, which confirms that the create must always send one.
+
+### Testing the split
+
+Fixtures are invented: made-up merchants, card and account numbers, never rows from a real statement.
+
+| Unit | Key cases |
+|---|---|
+| `statement` | Decimal comma to cents, with and without a thousands dot; the leading `'`; blank lines skipped; the payment row left out; a purchase and its refund left out as a pair, preferring the same description; a refund with no matching purchase, or with several merchants to choose from, refused; a missing column refused by name; the card number, account number and name on the card appear in no parsed line. |
+| `client` | The exact update body, with the amount in cents; the update is never retried. |
+| `matcher` | A card line's name match is `confident`; *always ask* and patterns stay `uncertain`. |
+| `server` | No matching collection, or several, is refused before anything is sent; a line listed twice or missing is refused; a failure between a create and its update deletes everything the call created; nothing is learned from an incomplete split; the card number appears in no tool output, including errors. |
+
+### Not in this story
+
+- Linking receipts (#4).
+- Learning merchants from collections split by hand earlier: those bookings carry the bank's text, not the merchant's.
+- A file holding more than one statement, or booking only part of a collection.
+- Matching payment-provider IBANs by merchant name (#2).
 
 ## Left to the builder
 
