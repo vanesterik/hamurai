@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import Literal
 
 import httpx
 from mcp.server import MCPServer
@@ -15,7 +16,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
-from hamurai.client import HamuraiClient, HamuraiError, SessionExpired
+from hamurai.client import BookingOutcomeUnknown, HamuraiClient, HamuraiError, SessionExpired
 from hamurai.config import ConfigError, load_config
 from hamurai.matcher import Labels, ProposalSet, propose_all
 from hamurai.models import Category, Transaction, VatCode
@@ -58,6 +59,30 @@ class SeedSummary(BaseModel):
 class SaveSummary(BaseModel):
     entries: int
     path: str
+
+
+class BookingLine(BaseModel):
+    transaction_id: int
+    category_id: int
+    vat_code_id: int
+
+
+class LineResult(BaseModel):
+    transaction_id: int
+    status: Literal["booked", "failed", "unknown", "not_tried"]
+    booking_id: int | None = None
+    reason: str | None = None
+
+
+class BookResult(BaseModel):
+    lines: list[LineResult]
+    session_expired: bool
+    message: str | None
+
+
+class UndoResult(BaseModel):
+    booking_id: int
+    forgotten: bool
 
 
 @dataclass
@@ -201,6 +226,106 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
             raise ToolError(str(exc)) from None
         save(suggestions, state.suggestions_path)
         return SaveSummary(entries=len(suggestions.entries), path=str(state.suggestions_path))
+
+    @mcp.tool()
+    async def book(bookings: list[BookingLine]) -> BookResult:
+        """Books the given lines in Hamurai, as manual bookings, and learns each one.
+
+        Call this only after the user has explicitly approved these exact lines. Every
+        transaction must come from the latest propose_bookings call. One failing line doesn't
+        stop the others; an expired session stops the batch and says which lines were not tried.
+        """
+        if not bookings:
+            raise ToolError("No lines to book.")
+        ids = [b.transaction_id for b in bookings]
+        duplicates = sorted({i for i in ids if ids.count(i) > 1})
+        if duplicates:
+            raise ToolError(f"Transactions listed more than once: {duplicates}")
+        unproposed = [i for i in ids if i not in state.proposed]
+        if unproposed:
+            raise ToolError(
+                f"Not in the latest proposals: {unproposed}. Run propose_bookings first."
+            )
+        with tool_errors():
+            labels = await state.labels()
+            unknown = sorted(
+                {b.category_id for b in bookings if b.category_id not in labels.categories}
+                | {b.vat_code_id for b in bookings if b.vat_code_id not in labels.vat_codes}
+            )
+            if unknown:
+                raise ToolError(f"Unknown category or VAT code IDs: {unknown}")
+            suggestions = load(state.suggestions_path)
+            dates = [state.proposed[i].entry_date for i in ids]
+            # Fetched again just before booking, so nothing gets booked twice.
+            latest = {t.id: t for t in await client.transactions(min(dates), max(dates))}
+
+        results: list[LineResult] = []
+        expired = False
+        for line in bookings:
+            transaction = latest.get(line.transaction_id)
+            if expired:
+                results.append(LineResult(transaction_id=line.transaction_id, status="not_tried"))
+                continue
+            if transaction is None or transaction.number_of_reconciliations > 0:
+                results.append(
+                    LineResult(
+                        transaction_id=line.transaction_id,
+                        status="failed",
+                        reason="already booked" if transaction else "no longer in Hamurai",
+                    )
+                )
+                continue
+            try:
+                booking = await client.create_booking(
+                    line.transaction_id, line.category_id, line.vat_code_id
+                )
+            except SessionExpired:
+                expired = True
+                results.append(LineResult(transaction_id=line.transaction_id, status="not_tried"))
+                continue
+            except HamuraiError as exc:
+                results.append(
+                    LineResult(
+                        transaction_id=line.transaction_id, status="failed", reason=exc.message
+                    )
+                )
+                continue
+            except BookingOutcomeUnknown:
+                results.append(
+                    LineResult(
+                        transaction_id=line.transaction_id,
+                        status="unknown",
+                        reason="no answer from Hamurai; "
+                        "run propose_bookings to see whether it was booked",
+                    )
+                )
+                continue
+            results.append(
+                LineResult(
+                    transaction_id=line.transaction_id, status="booked", booking_id=booking.id
+                )
+            )
+            if suggestions.record(transaction, booking):
+                save(suggestions, state.suggestions_path)
+        return BookResult(
+            lines=results,
+            session_expired=expired,
+            message=SESSION_EXPIRED if expired else None,
+        )
+
+    @mcp.tool(annotations=ToolAnnotations(destructive_hint=True))
+    async def undo_booking(booking_id: int) -> UndoResult:
+        """Deletes a booking in Hamurai and takes back what it taught the suggestions.
+
+        Takes the booking ID that book returned, not the transaction ID.
+        """
+        with tool_errors():
+            await client.delete_booking(booking_id)
+            suggestions = load(state.suggestions_path)
+            forgotten = suggestions.forget(booking_id)
+            if forgotten:
+                save(suggestions, state.suggestions_path)
+        return UndoResult(booking_id=booking_id, forgotten=forgotten)
 
     return mcp
 

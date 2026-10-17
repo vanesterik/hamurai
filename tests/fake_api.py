@@ -56,6 +56,7 @@ class FakeHamurai:
         self.expired = False
         self.expire_after_posts: int | None = None
         self.fail_next: list[Exception | int] = []
+        self.fail_posts: list[Exception | int] = []
         self.delay = 0.0
         self.in_flight = 0
         self.max_in_flight = 0
@@ -111,8 +112,9 @@ class FakeHamurai:
             self.in_flight -= 1
 
     def _respond(self, request: httpx.Request) -> httpx.Response:
-        if self.fail_next:
-            failure = self.fail_next.pop(0)
+        failures = self.fail_posts if request.method == "POST" else []
+        if self.fail_next or failures:
+            failure = (self.fail_next or failures).pop(0)
             if isinstance(failure, Exception):
                 raise failure
             return _error(failure, f"Fake error {failure}")
