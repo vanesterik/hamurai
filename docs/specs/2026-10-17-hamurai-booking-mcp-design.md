@@ -239,7 +239,7 @@ The two new tools follow the first story's approval rules: one writes nothing, t
    - every line is listed exactly once,
    - every category and VAT code ID is in Hamurai's lists,
    - the collection, fetched again, is still unbooked.
-4. For each line, purchases first and credits last, each in file order, it sends two requests, as the web app does. With credits last, the last credit's create already gets exactly its own amount as the remainder. *(Builder's call. Whether Hamurai accepts a positive booking on a negative collection, and a split that is over-booked partway, was not recorded; if it refuses, the rollback leaves the collection untouched.)*
+4. For each line, purchases first and credits last, each in file order, it sends two requests, as the web app does. With credits last, the last credit's create already gets exactly its own amount as the remainder. *(Builder's call.)* Hamurai accepts both a positive booking on a negative collection and a split that is over-booked partway: verified on the first live split with a credit (2026-10-17, eight lines including a +€74,45 credit).
    1. **Create**: the existing booking request, with the line's category and VAT code. Hamurai gives the new booking the collection's whole unbooked remainder.
    2. **Update**: the line's amount in cents, the category and VAT code again, the line's `Omschrijving` as the booking's description *(the user's decision, so each booking names its merchant in Hamurai)*, and the collection's date as the entry date, as when splitting by hand.
 5. Once every line is booked, each one is learned under its merchant name, with the line's `Transactiedatum` as the date. Nothing is learned from a split that didn't complete.
