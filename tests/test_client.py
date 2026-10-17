@@ -398,3 +398,44 @@ async def test_booking_description(client, fake):
     [read] = await client.bookings_for(1)
 
     assert read.description == "ACME SOFTWARE"
+
+
+async def test_files_stops_when_a_page_repeats(client, fake):
+    fake.files += [make_file(i, created_at="2026-09-01T10:00:00") for i in range(150)]
+    fake.repeat_last_page = True
+
+    files = await client.files(date(2026, 1, 1))
+
+    assert sorted(f.id for f in files) == list(range(150))
+    assert len([r for r in fake.requests if r.url.path.endswith("/files")]) <= 3
+
+
+async def test_unreadable_metadata_counts_as_without_amount(client, fake):
+    fake.files += [
+        {
+            **make_file(1, created_at="2026-07-01T10:00:00"),
+            "metadata": {"amountInCents": 875, "date": "01-08-2026"},
+        },
+        {
+            **make_file(2, created_at="2026-07-01T09:00:00"),
+            "metadata": {"amountInCents": "abc", "date": "2026-08-01"},
+        },
+    ]
+
+    files = await client.files(date(2026, 1, 1))
+
+    assert [(f.amount_cents, f.receipt_date) for f in files] == [
+        (875, None),
+        (None, date(2026, 8, 1)),
+    ]
+
+
+async def test_unreadable_file_hides_its_values(client, fake):
+    broken = make_file(1, created_at="2026-07-01T10:00:00")
+    del broken["name"]
+    fake.files.append(broken)
+
+    with pytest.raises(HamuraiError) as error:
+        await client.files(date(2026, 1, 1))
+
+    assert "SECRET-FILE" not in str(error.value)

@@ -105,6 +105,7 @@ class FakeHamurai:
         self.fail_deletes: list[Failure] = []
         self.fail_attaches: list[Failure] = []
         self.files: list[dict[str, Any]] = []
+        self.repeat_last_page = False
         self.delay = 0.0
         self.in_flight = 0
         self.max_in_flight = 0
@@ -271,6 +272,9 @@ class FakeHamurai:
         if request.method == "GET" and route == "/files":
             ordered = sorted(self.files, key=lambda f: f["createdAt"], reverse=True)
             offset = int(params.get("offset", "0"))
+            if self.repeat_last_page and offset >= len(ordered):
+                # As Hamurai might: past the end, the last page again instead of nothing.
+                offset = max(0, (len(ordered) - 1) // 100 * 100)
             return httpx.Response(200, json=ordered[offset : offset + 100])
         if request.method == "POST" and (match := re.fullmatch(r"/files/(\d+)/attach", route)):
             file = next((f for f in self.files if f["id"] == int(match[1])), None)

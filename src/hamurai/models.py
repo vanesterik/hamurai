@@ -57,6 +57,18 @@ class Booking(_Model):
     description: Annotated[str, BeforeValidator(lambda v: v or "")] = ""
 
 
+def _int_or_none(value: object) -> int | None:
+    """What OCR read, if it is a whole number of cents; anything else counts as unread."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _date_or_none(value: object) -> date | None:
+    try:
+        return date.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
 class File(_Model):
     """An uploaded file, such as a receipt. Its download secret is never read."""
 
@@ -65,10 +77,12 @@ class File(_Model):
     name: str
     mime_type: str
     # What Hamurai read from a receipt: a positive amount and the receipt's date.
-    amount_cents: int | None = Field(
+    amount_cents: Annotated[int | None, BeforeValidator(_int_or_none)] = Field(
         default=None, validation_alias=AliasPath("metadata", "amountInCents")
     )
-    receipt_date: date | None = Field(default=None, validation_alias=AliasPath("metadata", "date"))
+    receipt_date: Annotated[date | None, BeforeValidator(_date_or_none)] = Field(
+        default=None, validation_alias=AliasPath("metadata", "date")
+    )
     archived_at: datetime | None = None
     transaction_id: int | None = None
     invoice_id: int | None = None

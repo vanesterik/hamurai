@@ -176,7 +176,7 @@ async def test_link_receipts_refuses_a_receipt_twice(client, fake, path):
 
 
 async def test_one_failed_link_does_not_stop_the_rest(client, fake, path):
-    fake.fail_attaches = [500]
+    fake.fail_attaches = [400]
     async with connected(client, path) as session:
         result = await link_receipts(session, link(5, BANK), link(6, SPLIT))
 
@@ -204,3 +204,44 @@ async def test_unknown_link_outcome(client, fake, path):
 
     [line] = result.structured_content["links"]
     assert line["status"] == "unknown" and "propose_receipts" in line["reason"]
+
+
+async def test_gateway_error_on_attach_is_unknown(client, fake, path):
+    fake.fail_attaches = [("after", 504)]
+    async with connected(client, path) as session:
+        result = await link_receipts(session, link(5, BANK))
+
+    [line] = result.structured_content["links"]
+    assert line["status"] == "unknown" and "propose_receipts" in line["reason"]
+
+
+async def test_link_receipts_refuses_two_receipts_for_one_transaction(client, fake, path):
+    fake.files.append(
+        make_file(8, created_at="2026-07-03T10:00:00", amount_cents=875, receipt_date="2026-06-29")
+    )
+    async with connected(client, path) as session:
+        result = await link_receipts(session, link(5, BANK), link(8, BANK))
+
+    assert result.is_error and str(BANK) in text(result)
+    assert not [r for r in fake.requests if r.url.path.endswith("/attach")]
+
+
+async def test_identical_split_lines_take_a_receipt_each(client, fake, path):
+    fake.transactions.append(
+        make_transaction(3, iban=None, name="Card", amount=-2598, entry_date="2026-09-21")
+    )
+    split_booking(fake, 3, -1299, "NEBIUS")
+    split_booking(fake, 3, -1299, "NEBIUS")
+    fake.files += [
+        make_file(
+            9, created_at="2026-09-01T10:00:00", amount_cents=1299, receipt_date="2026-09-01"
+        ),
+        make_file(
+            10, created_at="2026-09-02T10:00:00", amount_cents=1299, receipt_date="2026-09-02"
+        ),
+    ]
+    async with connected(client, path) as session:
+        result = await link_receipts(session, link(9, 3), link(10, 3))
+
+    assert not result.is_error, text(result)
+    assert statuses(result) == [(9, "linked"), (10, "linked")]

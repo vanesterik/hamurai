@@ -330,6 +330,19 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
             raise ToolError(
                 f"Not in the latest proposal: {unproposed}. Run propose_receipts first."
             )
+        # As many receipts per transaction as it has targets: one for a bank transaction, one
+        # per line (of that amount) for a split.
+        # A list, not a set: two identical lines of one split are two targets.
+        proposed_targets = [p.target for p in state.receipts.confident] + [
+            t for group in state.receipts.ambiguous for t in group.targets
+        ]
+        room: dict[int, int] = {}
+        for target in proposed_targets:
+            room[target.transaction_id] = room.get(target.transaction_id, 0) + 1
+        asked = [link.transaction_id for link in links]
+        crowded = sorted({t for t in asked if asked.count(t) > room.get(t, 0)})
+        if crowded:
+            raise ToolError(f"More receipts than expenses for transactions {crowded}.")
         dates = {
             r.file_id: r.date
             for r in [p.receipt for p in state.receipts.confident]
@@ -357,7 +370,19 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
                 results.append(LinkResult(**link.model_dump(), status="not_tried"))
                 continue
             except HamuraiError as exc:
-                results.append(LinkResult(**link.model_dump(), status="failed", reason=exc.message))
+                # A gateway error may come after the link was made.
+                if exc.status < 500:
+                    results.append(
+                        LinkResult(**link.model_dump(), status="failed", reason=exc.message)
+                    )
+                    continue
+                results.append(
+                    LinkResult(
+                        **link.model_dump(),
+                        status="unknown",
+                        reason=f"{exc.message}; run propose_receipts to see whether it was linked",
+                    )
+                )
                 continue
             except Exception:
                 results.append(

@@ -10,12 +10,16 @@ from typing import Any
 
 import anyio
 import httpx
+from pydantic import ValidationError
 
 from hamurai.config import Config
 from hamurai.models import Booking, Category, File, Transaction, VatCode
 
 BASE_URL = "https://app.hamurai.example"
 PAGE_SIZE = 500
+# The files list comes 100 at a time, whatever is asked for.
+FILE_PAGE = 100
+MAX_FILE_PAGES = 1000
 
 # Sent by Hamurai's web app on every request. Reads work without them, but bookings
 # are refused without them: "You have no access to this action." (verified live).
@@ -77,14 +81,20 @@ class HamuraiClient:
 
         Hamurai pages them by `offset`, 100 at a time, and ignores page sizes and filters.
         """
-        files: list[File] = []
-        while True:
-            page = [
-                File.model_validate(f) for f in await self._get("/files", {"offset": len(files)})
-            ]
-            files += page
-            if not page or any(f.created_at.date() < since for f in page):
-                return files
+        files: dict[int, File] = {}
+        for page_number in range(MAX_FILE_PAGES):
+            body = await self._get("/files", {"offset": page_number * FILE_PAGE})
+            try:
+                page = [File.model_validate(f) for f in body]
+            except ValidationError:
+                # Never pydantic's own message: it quotes the file, download secret included.
+                raise HamuraiError(200, "a file in the list could not be read") from None
+            new = [f for f in page if f.id not in files]
+            files |= {f.id: f for f in new}
+            # A short page, or one with nothing new, is the end, however Hamurai pages.
+            if len(page) < FILE_PAGE or not new or any(f.created_at.date() < since for f in page):
+                return list(files.values())
+        raise HamuraiError(200, f"the file list went on for more than {MAX_FILE_PAGES} pages")
 
     async def attach_file(self, file_id: int, transaction_id: int) -> File:
         """Link a file, such as a receipt, to a bank transaction."""
