@@ -17,6 +17,10 @@ from hamurai.models import Booking, Category, Transaction, VatCode
 BASE_URL = "https://app.hamurai.example"
 PAGE_SIZE = 500
 
+# Sent by Hamurai's web app on every request. Reads work without them, but bookings
+# are refused without them: "You have no access to this action." (verified live).
+WEB_APP_HEADERS = {"x-hamurai": "HAMURAI", "device-type": "DESKTOP"}
+
 
 class SessionExpired(Exception):
     """Hamurai answered 401: the session cookie is no longer valid."""
@@ -39,7 +43,11 @@ class HamuraiClient:
         self._journal_id = config.journal_id
         self._http = httpx.AsyncClient(
             base_url=BASE_URL,
-            headers={"Cookie": config.cookie.get_secret_value(), "Accept": "application/json"},
+            headers={
+                "Cookie": config.cookie.get_secret_value(),
+                "Accept": "application/json",
+                **WEB_APP_HEADERS,
+            },
             timeout=30.0,
             transport=transport,
         )

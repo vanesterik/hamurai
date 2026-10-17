@@ -208,3 +208,17 @@ async def test_null_description_and_counter_account(client, fake):
 
     assert parsed.description == ""
     assert parsed.counter_account.number is None
+
+
+@pytest.mark.parametrize("call", ["read", "write"])
+async def test_requests_carry_the_web_app_headers(client, fake, call):
+    fake.transactions.append(make_transaction(1, iban="NL00TEST0000000001", name="One"))
+
+    if call == "read":
+        await client.vat_codes()
+    else:
+        await client.create_booking(1, 10, 20)
+
+    headers = fake.requests[-1].headers
+    assert headers["x-hamurai"] == "HAMURAI"
+    assert headers["device-type"] == "DESKTOP"
