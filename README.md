@@ -8,7 +8,7 @@ The design is in `docs/specs/2026-10-17-hamurai-booking-mcp-design.md`.
 
 1. `uv sync`
 2. Copy `.env.example` to `.env` and fill it in:
-   - `HAMURAI_COOKIE`: the whole `Cookie` request header (`name=value`). In the browser, open Hamurai, then DevTools → Network, pick any `/api/v2/...` request, and copy the value of its `Cookie` header.
+   - `HAMURAI_COOKIE`: paste the value of Hamurai's `Authorization` cookie after the `Authorization=` that is already there. In the browser, open Hamurai, then DevTools → Application → Cookies → `app.hamurai.example`, and copy the value of `Authorization`.
    - `HAMURAI_ADMINISTRATION_ID` and `HAMURAI_JOURNAL_ID`: the two numbers in the URL of those requests (`/administrations/<id>/...?journalId=<id>`).
 3. Start Claude Code in this directory. It picks up the `hamurai` server from `.mcp.json`; `/mcp` shows whether it is connected.
 
@@ -31,7 +31,7 @@ Ask Claude to book the quarter. It calls `propose_bookings` for the period, show
 
 ## When the session expires
 
-Hamurai sessions last about a day. When a tool says the session has expired, copy a fresh `Cookie` header into `.env` and reconnect the server with `/mcp`.
+Hamurai sessions last about a day. When a tool says the session has expired, paste a fresh `Authorization` cookie value into `.env` and reconnect the server with `/mcp`.
 
 ## Checks
 

@@ -24,8 +24,8 @@ from hamurai.seeding import DraftEntry, Resolution, UnresolvedError, build_draft
 from hamurai.suggestions import SUGGESTIONS_PATH, Entry, SuggestionsFileError, load, save
 
 SESSION_EXPIRED = (
-    "The Hamurai session has expired. Copy a fresh Cookie header into HAMURAI_COOKIE "
-    "in .env and reconnect the server with /mcp."
+    "The Hamurai session has expired. Paste a fresh Authorization cookie value into "
+    "HAMURAI_COOKIE in .env and reconnect the server with /mcp."
 )
 
 READ_ONLY = ToolAnnotations(read_only_hint=True)

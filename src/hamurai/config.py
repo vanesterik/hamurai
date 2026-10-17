@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr, ValidationError, field_validator
+from pydantic_core import PydanticCustomError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,6 +21,17 @@ class Config(BaseSettings):
     cookie: SecretStr
     administration_id: int
     journal_id: int
+
+    @field_validator("cookie")
+    @classmethod
+    def _cookie_has_name_and_value(cls, cookie: SecretStr) -> SecretStr:
+        # `.env.example` ships with `Authorization=` filled in: a name without a value is missing.
+        name, separator, value = cookie.get_secret_value().partition("=")
+        if separator and not value.strip():
+            raise PydanticCustomError("missing", "no cookie value")
+        if not separator or not name.strip():
+            raise PydanticCustomError("cookie_format", "expected name=value")
+        return cookie
 
 
 def load_config(env_file: Path | None = ROOT / ".env") -> Config:

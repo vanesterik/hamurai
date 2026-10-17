@@ -67,3 +67,20 @@ def test_repr_hides_the_cookie(tmp_path):
     env = write_env(tmp_path, cookie="session=abc", administration_id="11111", journal_id="22222")
 
     assert "abc" not in repr(load_config(env))
+
+
+@pytest.mark.parametrize("cookie", ["Authorization=", "Authorization=   "])
+def test_cookie_name_without_value_counts_as_missing(tmp_path, cookie):
+    env = write_env(tmp_path, cookie=cookie, administration_id="11111", journal_id="22222")
+
+    with pytest.raises(ConfigError, match="HAMURAI_COOKIE is missing"):
+        load_config(env)
+
+
+def test_cookie_without_name_is_invalid(tmp_path):
+    env = write_env(tmp_path, cookie="SECRET-VALUE", administration_id="11111", journal_id="22222")
+
+    with pytest.raises(ConfigError, match="HAMURAI_COOKIE is invalid") as err:
+        load_config(env)
+
+    assert "SECRET-VALUE" not in str(err.value)
