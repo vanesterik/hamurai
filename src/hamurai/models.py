@@ -1,8 +1,9 @@
 """Hamurai's data, with only the fields that are used. Unknown fields are ignored."""
 
 from datetime import date
+from typing import Annotated
 
-from pydantic import AliasPath, BaseModel, ConfigDict, Field
+from pydantic import AliasPath, BaseModel, BeforeValidator, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 
@@ -21,8 +22,11 @@ class Transaction(_Model):
     id: int
     entry_date: date
     amount_cents: int = Field(alias="amount")
-    description: str = ""
-    counter_account: CounterAccount = CounterAccount()
+    # Hamurai may send null for these, e.g. for a bank fee.
+    description: Annotated[str, BeforeValidator(lambda v: v or "")] = ""
+    counter_account: Annotated[CounterAccount, BeforeValidator(lambda v: v or {})] = (
+        CounterAccount()
+    )
     is_fully_reconciled: bool
     number_of_reconciliations: int
 

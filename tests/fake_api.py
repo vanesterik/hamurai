@@ -56,7 +56,8 @@ class FakeHamurai:
         self.expired = False
         self.expire_after_posts: int | None = None
         self.fail_next: list[Exception | int] = []
-        self.fail_posts: list[Exception | int] = []
+        self.fail_posts: list[Exception | int | httpx.Response] = []
+        self.fail_routes: dict[str, list[Exception | int]] = {}
         self.delay = 0.0
         self.in_flight = 0
         self.max_in_flight = 0
@@ -97,6 +98,23 @@ class FakeHamurai:
         transaction["isFullyReconciled"] = True
         return booking_id
 
+    def add_other_booking(self, transaction_id: int) -> int:
+        """Reconcile a transaction against something other than a category, e.g. an invoice."""
+        transaction = self._transaction(transaction_id)
+        assert transaction is not None
+        self._next_booking_id += 1
+        self.bookings[self._next_booking_id] = {
+            "type": "SALES_INVOICE",
+            "id": self._next_booking_id,
+            "transactionInfo": {"id": transaction_id, "journalId": JOURNAL_ID},
+            "amountInCents": transaction["amount"],
+            "generalLedgerAccountInfo": None,
+            "vatCode": None,
+        }
+        transaction["numberOfReconciliations"] += 1
+        transaction["isFullyReconciled"] = True
+        return self._next_booking_id
+
     def _transaction(self, transaction_id: int) -> dict[str, Any] | None:
         return next((t for t in self.transactions if t["id"] == transaction_id), None)
 
@@ -112,11 +130,14 @@ class FakeHamurai:
             self.in_flight -= 1
 
     def _respond(self, request: httpx.Request) -> httpx.Response:
-        failures = self.fail_posts if request.method == "POST" else []
+        route = request.url.path.removeprefix(PREFIX)
+        failures = self.fail_posts if request.method == "POST" else self.fail_routes.get(route, [])
         if self.fail_next or failures:
             failure = (self.fail_next or failures).pop(0)
             if isinstance(failure, Exception):
                 raise failure
+            if isinstance(failure, httpx.Response):
+                return failure
             return _error(failure, f"Fake error {failure}")
         if self.expired:
             return _error(401, "Not logged in", code=2003)
@@ -153,7 +174,9 @@ class FakeHamurai:
             booking_id = self.add_booking(
                 body["transactionId"], body["generalLedgerAccountId"], body["vatCodeId"]
             )
-            return httpx.Response(201, json=self.bookings[booking_id])
+            # The spec records no transactionInfo in the POST response; only the GET has it.
+            created = {k: v for k, v in self.bookings[booking_id].items() if k != "transactionInfo"}
+            return httpx.Response(201, json=created)
         if request.method == "DELETE" and (match := re.fullmatch(r"/reconciliations/(\d+)", route)):
             booking = self.bookings.pop(int(match[1]), None)
             if booking is None:

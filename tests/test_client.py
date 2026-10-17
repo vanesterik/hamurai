@@ -165,3 +165,46 @@ async def test_lists(client):
 
     assert [(c.id, c.code, c.name) for c in categories][0] == (10, "4500", "Kantoorkosten")
     assert [(v.id, v.description) for v in vat_codes][0] == (20, "21% hoog")
+
+
+async def test_create_booking_takes_transaction_id_from_the_request(client, fake):
+    fake.transactions.append(make_transaction(1, iban="NL00TEST0000000001", name="One"))
+
+    booking = await client.create_booking(1, 10, 20)
+
+    assert booking.transaction_id == 1
+
+
+async def test_unreadable_booking_answer_is_unknown(client, fake):
+    fake.transactions.append(make_transaction(1, iban="NL00TEST0000000001", name="One"))
+    fake.fail_posts = [httpx.Response(201, text="not json")]
+
+    with pytest.raises(BookingOutcomeUnknown):
+        await client.create_booking(1, 10, 20)
+
+
+async def test_bookings_for_many_raises_session_expired_unwrapped(client, fake):
+    add_transactions(fake, 3)
+    fake.fail_routes = {"/reconciliations": [401]}
+
+    with pytest.raises(SessionExpired):
+        await client.bookings_for_many([1, 2, 3])
+
+
+async def test_bookings_for_skips_bookings_not_onto_a_category(client, fake):
+    fake.transactions.append(make_transaction(1, iban="NL00TEST0000000001", name="One"))
+    fake.add_other_booking(1)
+
+    assert await client.bookings_for(1) == []
+
+
+async def test_null_description_and_counter_account(client, fake):
+    transaction = make_transaction(1, iban=None, name=None)
+    transaction["description"] = None
+    transaction["counterAccount"] = None
+    fake.transactions.append(transaction)
+
+    [parsed] = await client.transactions()
+
+    assert parsed.description == ""
+    assert parsed.counter_account.number is None

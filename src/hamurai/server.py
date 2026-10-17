@@ -16,7 +16,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
-from hamurai.client import BookingOutcomeUnknown, HamuraiClient, HamuraiError, SessionExpired
+from hamurai.client import HamuraiClient, HamuraiError, SessionExpired
 from hamurai.config import ConfigError, load_config
 from hamurai.matcher import Labels, ProposalSet, propose_all
 from hamurai.models import Category, Transaction, VatCode
@@ -53,6 +53,7 @@ class SeedSummary(BaseModel):
     entries: int
     bookings: int
     skipped_split: int
+    skipped_other: int
     flagged: list[FlaggedCounterparty]
 
 
@@ -83,6 +84,7 @@ class BookResult(BaseModel):
 class UndoResult(BaseModel):
     booking_id: int
     forgotten: bool
+    already_gone: bool = False
 
 
 @dataclass
@@ -187,6 +189,7 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
             skipped_split=sum(
                 t.is_fully_reconciled and t.number_of_reconciliations > 1 for t in transactions
             ),
+            skipped_other=sum(not bookings[t.id] for t in to_read),
             flagged=[
                 FlaggedCounterparty(
                     key=d.key,
@@ -290,7 +293,9 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
                     )
                 )
                 continue
-            except BookingOutcomeUnknown:
+            except Exception:
+                # BookingOutcomeUnknown, or anything unexpected: once a request may have been
+                # sent, every outcome must reach the report.
                 results.append(
                     LineResult(
                         transaction_id=line.transaction_id,
@@ -300,13 +305,20 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
                     )
                 )
                 continue
+            reason = None
+            try:
+                if suggestions.record(transaction, booking):
+                    save(suggestions, state.suggestions_path)
+            except Exception as exc:
+                reason = f"booked, but not learned ({type(exc).__name__})"
             results.append(
                 LineResult(
-                    transaction_id=line.transaction_id, status="booked", booking_id=booking.id
+                    transaction_id=line.transaction_id,
+                    status="booked",
+                    booking_id=booking.id,
+                    reason=reason,
                 )
             )
-            if suggestions.record(transaction, booking):
-                save(suggestions, state.suggestions_path)
         return BookResult(
             lines=results,
             session_expired=expired,
@@ -319,13 +331,23 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
 
         Takes the booking ID that book returned, not the transaction ID.
         """
+        already_gone = False
         with tool_errors():
-            await client.delete_booking(booking_id)
+            try:
+                await client.delete_booking(booking_id)
+            except HamuraiError as exc:
+                # Gone already (deleted in the web app, or an earlier undo lost its answer):
+                # still take back what it taught.
+                if exc.status != 404:
+                    raise
+                already_gone = True
             suggestions = load(state.suggestions_path)
             forgotten = suggestions.forget(booking_id)
+            if already_gone and not forgotten:
+                raise HamuraiError(404, f"no booking {booking_id}, in Hamurai or learned")
             if forgotten:
                 save(suggestions, state.suggestions_path)
-        return UndoResult(booking_id=booking_id, forgotten=forgotten)
+        return UndoResult(booking_id=booking_id, forgotten=forgotten, already_gone=already_gone)
 
     return mcp
 

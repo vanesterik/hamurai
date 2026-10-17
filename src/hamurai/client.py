@@ -65,8 +65,15 @@ class HamuraiClient:
             page += 1
 
     async def bookings_for(self, transaction_id: int) -> list[Booking]:
+        """The bookings onto a category; others (e.g. onto an invoice) are left out."""
         body = await self._get("/reconciliations", {"transactionId": transaction_id})
-        return [Booking.model_validate(b) for b in body]
+        return [
+            Booking.model_validate(b)
+            for b in body
+            if b.get("type") == "GENERAL_LEDGER_ACCOUNT"
+            and b.get("generalLedgerAccountInfo")
+            and b.get("vatCode")
+        ]
 
     async def bookings_for_many(
         self,
@@ -83,9 +90,17 @@ class HamuraiClient:
             if on_progress is not None:
                 await on_progress(len(found), len(transaction_ids))
 
-        async with anyio.create_task_group() as group:
-            for transaction_id in transaction_ids:
-                group.start_soon(fetch, transaction_id)
+        try:
+            async with anyio.create_task_group() as group:
+                for transaction_id in transaction_ids:
+                    group.start_soon(fetch, transaction_id)
+        except ExceptionGroup as errors:
+            # The task group wraps failures; callers expect the error itself, an expired
+            # session first of all.
+            error: BaseException = (errors.subgroup(SessionExpired) or errors).exceptions[0]
+            while isinstance(error, ExceptionGroup):
+                error = error.exceptions[0]
+            raise error from None
         return found
 
     async def categories(self) -> list[Category]:
@@ -112,7 +127,14 @@ class HamuraiClient:
             raise HamuraiError(0, "could not connect to Hamurai") from None
         except httpx.TransportError:
             raise BookingOutcomeUnknown() from None
-        return Booking.model_validate(_checked(response).json())
+        _checked(response)
+        try:
+            # The POST answer has no transactionInfo, so the transaction ID comes from the request.
+            return Booking.model_validate(
+                {**response.json(), "transactionInfo": {"id": transaction_id}}
+            )
+        except ValueError:
+            raise BookingOutcomeUnknown() from None
 
     async def delete_booking(self, booking_id: int) -> None:
         try:

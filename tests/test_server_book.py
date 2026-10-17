@@ -166,7 +166,11 @@ async def test_undo_deletes_and_takes_back_count(client, fake, path):
 
         result = await session.call_tool("undo_booking", {"booking_id": booking_id})
 
-    assert result.structured_content == {"booking_id": booking_id, "forgotten": True}
+    assert result.structured_content == {
+        "booking_id": booking_id,
+        "forgotten": True,
+        "already_gone": False,
+    }
     assert fake.bookings == {}
     entry = learned_for(path, IBAN)
     assert entry.current == Pair(category_id=10, vat_code_id=20)
@@ -225,3 +229,40 @@ async def test_cookie_never_in_output(client, fake, path, failure):
     for result in results:
         assert secret not in text(result)
         assert secret not in str(result.structured_content)
+
+
+async def test_failing_to_learn_still_reports_the_booking(client, fake, path, monkeypatch):
+    def broken_save(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("hamurai.server.save", broken_save)
+
+    async with connected(client, path) as session:
+        result = await book(session, line(10), line(11))
+
+    assert statuses(result) == [(10, "booked"), (11, "booked")]
+    assert "not learned" in result.structured_content["lines"][0]["reason"]
+    assert len(fake.bookings) == 2
+
+
+async def test_unreadable_booking_answer_is_unknown(client, fake, path):
+    fake.fail_posts = [httpx.Response(201, text="not json")]
+
+    async with connected(client, path) as session:
+        result = await book(session, line(10), line(11))
+
+    assert statuses(result) == [(10, "unknown"), (11, "booked")]
+
+
+async def test_undo_of_booking_already_gone_still_forgets(client, fake, path):
+    async with connected(client, path) as session:
+        booked = await book(session, line(10, 11))
+        booking_id = booked.structured_content["lines"][0]["booking_id"]
+        del fake.bookings[booking_id]  # deleted in the web app in the meantime
+
+        result = await session.call_tool("undo_booking", {"booking_id": booking_id})
+
+    assert not result.is_error, text(result)
+    assert result.structured_content["forgotten"] is True
+    assert result.structured_content["already_gone"] is True
+    assert learned_for(path, IBAN).current == Pair(category_id=10, vat_code_id=20)

@@ -1,6 +1,7 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
+import httpx
 import pytest
 from conftest import COOKIE
 from fake_api import make_transaction
@@ -227,3 +228,49 @@ async def test_cookie_never_in_output(client, fake, path, failure):
             result = await session.call_tool(name, arguments)
             assert secret not in text(result)
             assert secret not in str(result.structured_content)
+
+
+@pytest.mark.parametrize(
+    ("failures", "message"),
+    [
+        ([401], SESSION_EXPIRED),
+        ([httpx.ConnectError("down"), httpx.ConnectError("down")], "Could not reach Hamurai"),
+    ],
+)
+async def test_seed_failing_partway_gives_a_clear_message(client, fake, path, failures, message):
+    booked_history(fake)
+    fake.fail_routes = {"/reconciliations": failures}
+
+    async with connected(client, path) as session:
+        result = await session.call_tool("seed_suggestions", {})
+
+    assert result.is_error
+    assert message in text(result)
+
+
+async def test_seed_skips_bookings_not_onto_a_category(client, fake, path):
+    booked_history(fake)
+    fake.transactions.append(make_transaction(9, iban=IBAN, name="Acme", entry_date="2026-04-09"))
+    fake.add_other_booking(9)
+
+    async with connected(client, path) as session:
+        result = await session.call_tool("seed_suggestions", {})
+
+    assert not result.is_error, text(result)
+    assert result.structured_content["skipped_other"] == 1
+    assert result.structured_content["bookings"] == 5
+
+
+async def test_propose_bookings_with_null_fields(client, fake, path):
+    transaction = make_transaction(1, iban=None, name=None)
+    transaction["counterAccount"] = None
+    transaction["description"] = None
+    fake.transactions.append(transaction)
+
+    async with connected(client, path) as session:
+        result = await session.call_tool(
+            "propose_bookings", {"start_date": "2026-07-01", "end_date": "2026-09-30"}
+        )
+
+    assert not result.is_error, text(result)
+    assert len(result.structured_content["proposals"]["unknown"]) == 1
