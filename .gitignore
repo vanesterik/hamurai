@@ -1,2 +1,11 @@
 # Environment variables
 .env
+
+# Learned bookings: real IBANs and names
+data/
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/

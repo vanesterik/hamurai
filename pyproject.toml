@@ -1,0 +1,38 @@
+[project]
+name = "hamurai"
+version = "0.1.0"
+description = "An MCP server that books Hamurai bank transactions with Claude Code."
+requires-python = ">=3.14"
+dependencies = [
+    "httpx>=0.28.1",
+    "mcp>=2.3",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.16.0",
+    "pyyaml>=6.0.3",
+]
+
+[project.scripts]
+hamurai = "hamurai.server:main"
+
+[build-system]
+requires = ["uv_build>=0.9,<0.20"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ANN"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+    "ty>=0.0.89",
+]
