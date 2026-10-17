@@ -116,6 +116,24 @@ class SplitResult(BaseModel):
     message: str | None
 
 
+class ReceiptLink(BaseModel):
+    file_id: int
+    transaction_id: int
+
+
+class LinkResult(BaseModel):
+    file_id: int
+    transaction_id: int
+    status: Literal["linked", "failed", "unknown", "not_tried"]
+    reason: str | None = None
+
+
+class LinkReceiptsResult(BaseModel):
+    links: list[LinkResult]
+    session_expired: bool
+    message: str | None
+
+
 class UndoResult(BaseModel):
     booking_id: int
     forgotten: bool
@@ -278,6 +296,85 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
             files = await client.files(start_date - RECEIPT_LOOKBACK)
         state.receipts = match(targets(transactions, splits), files)
         return state.receipts
+
+    @mcp.tool()
+    async def link_receipts(links: list[ReceiptLink]) -> LinkReceiptsResult:
+        """Links the given receipts to their transactions in Hamurai.
+
+        Call this only after the user has explicitly approved these exact pairs. Every pair
+        must come from the latest propose_receipts call: a confident pair, or a receipt and a
+        transaction from the same ambiguous group. One failing link doesn't stop the others;
+        an expired session stops the batch and says which links were not tried.
+        """
+        if not links:
+            raise ToolError("No receipts to link.")
+        ids = [link.file_id for link in links]
+        repeated = sorted({i for i in ids if ids.count(i) > 1})
+        if repeated:
+            raise ToolError(f"Receipts listed more than once: {repeated}")
+        if state.receipts is None:
+            raise ToolError("Nothing proposed: run propose_receipts first.")
+        allowed = {(p.receipt.file_id, p.target.transaction_id) for p in state.receipts.confident}
+        allowed |= {
+            (receipt.file_id, target.transaction_id)
+            for group in state.receipts.ambiguous
+            for receipt in group.receipts
+            for target in group.targets
+        }
+        unproposed = [
+            (link.file_id, link.transaction_id)
+            for link in links
+            if (link.file_id, link.transaction_id) not in allowed
+        ]
+        if unproposed:
+            raise ToolError(
+                f"Not in the latest proposal: {unproposed}. Run propose_receipts first."
+            )
+        dates = {
+            r.file_id: r.date
+            for r in [p.receipt for p in state.receipts.confident]
+            + [r for group in state.receipts.ambiguous for r in group.receipts]
+        }
+        with tool_errors():
+            # Listed again just before linking, so a receipt is never linked twice.
+            current = {
+                f.id: f for f in await client.files(min(dates[i] for i in ids) - timedelta(days=1))
+            }
+        taken = [i for i in ids if i not in current or current[i].is_linked]
+        if taken:
+            raise ToolError(f"Receipts no longer unlinked: {taken}. Nothing is linked.")
+
+        results: list[LinkResult] = []
+        expired = False
+        for link in links:
+            if expired:
+                results.append(LinkResult(**link.model_dump(), status="not_tried"))
+                continue
+            try:
+                await client.attach_file(link.file_id, link.transaction_id)
+            except SessionExpired:
+                expired = True
+                results.append(LinkResult(**link.model_dump(), status="not_tried"))
+                continue
+            except HamuraiError as exc:
+                results.append(LinkResult(**link.model_dump(), status="failed", reason=exc.message))
+                continue
+            except Exception:
+                results.append(
+                    LinkResult(
+                        **link.model_dump(),
+                        status="unknown",
+                        reason="no answer from Hamurai; "
+                        "run propose_receipts to see whether it was linked",
+                    )
+                )
+                continue
+            results.append(LinkResult(**link.model_dump(), status="linked"))
+        return LinkReceiptsResult(
+            links=results,
+            session_expired=expired,
+            message=SESSION_EXPIRED if expired else None,
+        )
 
     @mcp.tool(annotations=READ_ONLY)
     async def seed_suggestions(ctx: Context) -> SeedSummary:

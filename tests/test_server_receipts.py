@@ -98,3 +98,109 @@ async def test_propose_receipts_session_expired(client, fake, path):
         result = await propose(session)
 
     assert result.is_error and SESSION_EXPIRED in text(result)
+
+
+def link(file_id: int, transaction_id: int) -> dict:
+    return {"file_id": file_id, "transaction_id": transaction_id}
+
+
+async def link_receipts(session, *links: dict):
+    proposed = await propose(session)
+    assert not proposed.is_error, text(proposed)
+    return await session.call_tool("link_receipts", {"links": list(links)})
+
+
+def file(fake, file_id: int) -> dict:
+    return next(f for f in fake.files if f["id"] == file_id)
+
+
+def statuses(result) -> list[tuple[int, str]]:
+    return [(r["file_id"], r["status"]) for r in result.structured_content["links"]]
+
+
+async def test_link_receipts_links_the_approved_pairs(client, fake, path):
+    async with connected(client, path) as session:
+        result = await link_receipts(session, link(5, BANK), link(6, SPLIT))
+
+    assert not result.is_error, text(result)
+    assert statuses(result) == [(5, "linked"), (6, "linked")]
+    assert (file(fake, 5)["transactionId"], file(fake, 6)["transactionId"]) == (BANK, SPLIT)
+    assert "SECRET-FILE" not in text(result) + str(result.structured_content)
+
+
+async def test_link_receipts_refuses_an_unproposed_pair(client, fake, path):
+    async with connected(client, path) as session:
+        result = await link_receipts(session, link(5, SPLIT))
+
+    assert result.is_error and "propose_receipts" in text(result)
+    assert not [r for r in fake.requests if r.url.path.endswith("/attach")]
+
+
+async def test_link_receipts_without_a_proposal(client, fake, path):
+    async with connected(client, path) as session:
+        result = await session.call_tool("link_receipts", {"links": [link(5, BANK)]})
+
+    assert result.is_error and "propose_receipts" in text(result)
+
+
+async def test_link_receipts_accepts_a_pick_from_an_ambiguous_group(client, fake, path):
+    fake.files.append(
+        make_file(8, created_at="2026-07-03T10:00:00", amount_cents=875, receipt_date="2026-06-29")
+    )
+    async with connected(client, path) as session:
+        proposed = await propose(session)
+        [group] = proposed.structured_content["ambiguous"]
+        assert sorted(r["file_id"] for r in group["receipts"]) == [5, 8]
+        result = await session.call_tool("link_receipts", {"links": [link(8, BANK)]})
+
+    assert statuses(result) == [(8, "linked")]
+
+
+async def test_link_receipts_refuses_a_receipt_linked_meanwhile(client, fake, path):
+    async with connected(client, path) as session:
+        proposed = await propose(session)
+        assert not proposed.is_error
+        file(fake, 5)["transactionId"] = 99
+        result = await session.call_tool("link_receipts", {"links": [link(5, BANK)]})
+
+    assert result.is_error and "no longer unlinked" in text(result)
+    assert not [r for r in fake.requests if r.url.path.endswith("/attach")]
+
+
+async def test_link_receipts_refuses_a_receipt_twice(client, fake, path):
+    async with connected(client, path) as session:
+        result = await link_receipts(session, link(5, BANK), link(5, BANK))
+
+    assert result.is_error
+    assert not [r for r in fake.requests if r.url.path.endswith("/attach")]
+
+
+async def test_one_failed_link_does_not_stop_the_rest(client, fake, path):
+    fake.fail_attaches = [500]
+    async with connected(client, path) as session:
+        result = await link_receipts(session, link(5, BANK), link(6, SPLIT))
+
+    assert statuses(result) == [(5, "failed"), (6, "linked")]
+
+
+async def test_session_expiry_stops_the_links(client, fake, path):
+    async with connected(client, path) as session:
+        proposed = await propose(session)
+        assert not proposed.is_error
+        fake.expire_after_posts = 0
+        result = await session.call_tool(
+            "link_receipts", {"links": [link(5, BANK), link(6, SPLIT)]}
+        )
+
+    data = result.structured_content
+    assert data["session_expired"] and data["message"] == SESSION_EXPIRED
+    assert statuses(result) == [(5, "not_tried"), (6, "not_tried")]
+
+
+async def test_unknown_link_outcome(client, fake, path):
+    fake.fail_attaches = [httpx.ReadTimeout("timeout")]
+    async with connected(client, path) as session:
+        result = await link_receipts(session, link(5, BANK))
+
+    [line] = result.structured_content["links"]
+    assert line["status"] == "unknown" and "propose_receipts" in line["reason"]

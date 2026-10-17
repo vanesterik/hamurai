@@ -25,6 +25,8 @@ The design is in `docs/specs/2026-10-17-hamurai-booking-mcp-design.md`, the impl
 | `book(bookings)` | Hamurai and `data/suggestions.yaml` | Books the given lines and learns each one. The only tool that creates bookings. |
 | `propose_split(statement_path)` | nothing | Reads a credit card statement (CSV), finds the unbooked collection its purchases add up to, and proposes a category and VAT code for each line: `confident` for a known merchant, `uncertain` for an *always ask* merchant or a description match, `unknown` otherwise. Lists the rows left out. |
 | `book_split(transaction_id, lines)` | Hamurai and `data/suggestions.yaml` | Books the proposed collection as one booking per line, all or nothing, and learns each merchant. |
+| `propose_receipts(start_date, end_date)` | nothing | Matches the unlinked receipts to the period's expenses by amount and date: `confident` pairs, `ambiguous` groups to pick from, `unmatched` receipts, and how many receipts have no amount Hamurai could read. |
+| `link_receipts(links)` | Hamurai | Links the given receipts to their transactions. |
 | `undo_booking(booking_id)` | Hamurai and `data/suggestions.yaml` | Deletes a booking and takes back what it taught. |
 
 Amounts in tool output are in cents: `-1299` is € −12,99.
@@ -43,7 +45,7 @@ No test talks to Hamurai: they run against an in-memory fake with invented data.
 
 ### Connect
 
-Run `/mcp` in Claude Code. `hamurai` should show as connected with nine tools. If it failed to start, run `uv run hamurai` in a terminal: it prints the reason and exits (a missing or empty variable in `.env` is named, never shown). If it starts, it waits for Claude Code; stop it with Ctrl-C.
+Run `/mcp` in Claude Code. `hamurai` should show as connected with eleven tools. If it failed to start, run `uv run hamurai` in a terminal: it prints the reason and exits (a missing or empty variable in `.env` is named, never shown). If it starts, it waits for Claude Code; stop it with Ctrl-C.
 
 After changing `.env` or the code, reconnect the server from `/mcp`: it reads `.env` only when it starts.
 
@@ -108,6 +110,21 @@ Claude shows the confident lines as one table and the rest one at a time, as whe
 `book_split` books each line onto the collection with the merchant's description and the collection's date. If anything fails partway, it deletes every booking it made, so the collection is either split completely or not at all. If a delete fails too, its report lists the booking IDs left behind. Once the whole split is booked, each merchant is learned, and next month's statement proposes it as `confident`.
 
 To undo a split, undo each of its bookings (the IDs are in `book_split`'s report).
+
+### Link receipts
+
+Upload receipts with the Hamurai app as usual, then ask:
+
+> Link the receipts for Q3 2026.
+
+`propose_receipts` matches each unlinked receipt to an expense in the period, booked or not. It matches by the amount and date Hamurai read from the receipt, because Hamurai keeps no supplier:
+
+- **A bank transaction** without files matches a receipt of the same amount dated from 30 days before it to 3 days after.
+- **Each line of a split**, such as a card collection, matches a receipt of the line's amount dated up to 45 days before the collection. The receipt is linked to the collection, which can hold several.
+
+Only a pair nothing else could fit is `confident`: Claude shows those as one table. When a receipt fits more than one expense, or an expense more than one receipt, they come as an `ambiguous` group, and you pick one pair or none. Receipts Hamurai read no amount from, which is most PDFs, are only counted.
+
+`link_receipts` links what you approve, after checking each receipt is still unlinked. A wrong link is undone in the web app: the tool can't unlink yet.
 
 ### Undo a booking
 
