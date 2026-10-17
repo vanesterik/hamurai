@@ -84,16 +84,23 @@ def parse_amount(text: str) -> int:
 
 
 def read_statement(path: Path) -> Statement:
-    """The statement's purchases, with the card payment and refunded purchases left out."""
+    """The statement's lines: its purchases, and any credit without a matching purchase. The
+    card payment and refunded purchases, with their refunds, are left out."""
     rows = _read_rows(path)
     left_out = [r.left_out("card payment") for r in rows if _is_payment(r)]
     purchases = [r for r in rows if r.amount_cents < 0]
     refunds = [r for r in rows if r.amount_cents >= 0 and not _is_payment(r)]
+    credits = []
     for refund in refunds:
         purchase = _refunded(refund, purchases)
+        if purchase is None:
+            # Its purchase was on an earlier statement: a line of its own.
+            credits.append(refund)
+            continue
         purchases.remove(purchase)
         left_out += [purchase.left_out("refunded"), refund.left_out("refund")]
-    if not purchases:
+    kept = sorted(purchases + credits, key=lambda r: r.row)
+    if not kept:
         raise StatementError("the statement has no purchases to book")
     lines = [
         StatementLine(
@@ -103,7 +110,7 @@ def read_statement(path: Path) -> Statement:
             description=r.description,
             amount_cents=r.amount_cents,
         )
-        for number, r in enumerate(purchases, start=1)
+        for number, r in enumerate(kept, start=1)
     ]
     return Statement(lines=lines, left_out=left_out)
 
@@ -146,11 +153,12 @@ def _is_payment(row: _Row) -> bool:
     return row.amount_cents >= 0 and row.description.upper().startswith(PAYMENT_PREFIX)
 
 
-def _refunded(refund: _Row, purchases: list[_Row]) -> _Row:
-    """The purchase a refund cancels: same amount, preferably the same merchant."""
+def _refunded(refund: _Row, purchases: list[_Row]) -> _Row | None:
+    """The purchase a refund cancels: same amount, preferably the same merchant. None when
+    the file has no purchase of that amount."""
     candidates = [p for p in purchases if p.amount_cents == -refund.amount_cents]
     if not candidates:
-        raise StatementError(f"row {refund.row} is a refund without a purchase of the same amount")
+        return None
     name = normalize_name(refund.description)
     same = [c for c in candidates if normalize_name(c.description) == name]
     if same:

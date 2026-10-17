@@ -119,11 +119,15 @@ def test_refund_pairs_within_one_merchant(tmp_path):
     assert [line.description for line in statement.lines] == ["SHOP A"]
 
 
-def test_refund_without_its_purchase_is_refused(tmp_path):
+def test_unmatched_credit_is_a_line(tmp_path):
     rows = [ACME, ("2026-08-05", "2026-08-06", "SHOP A", "7,50")]
-    with pytest.raises(StatementError, match="row 2") as error:
-        read_statement(write_statement(tmp_path, rows))
-    assert "7,50" not in str(error.value)
+    statement = read_statement(write_statement(tmp_path, rows))
+    assert [(line.number, line.description, line.amount_cents) for line in statement.lines] == [
+        (1, "ACME SOFTWARE", -1299),
+        (2, "SHOP A", 750),
+    ]
+    assert statement.total_cents == -549
+    assert statement.left_out == []
 
 
 def test_ambiguous_refund_is_refused(tmp_path):

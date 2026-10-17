@@ -421,3 +421,17 @@ async def test_a_changed_remainder_stops_the_split(client, fake, path, statement
     assert data["status"] == "incomplete"
     [left] = bookings_on_collection(fake)
     assert data["left_behind"] == [left["id"]]
+
+
+async def test_book_split_books_a_credit_last(client, fake, path, tmp_path):
+    credit = ("2026-08-20", "2026-08-21", "SHOP A", "7,50")
+    statement = write_statement(tmp_path, [credit, ACME, CLOUD], name="credit.csv")
+    fake.transactions[0]["amount"] = -9011
+    lines = [split_line(1, 10, 20), split_line(2, 10, 20), split_line(3, 11, 21)]
+    async with connected(client, path) as session:
+        result = await book_split(session, statement, lines)
+
+    assert not result.is_error, text(result)
+    assert result.structured_content["status"] == "booked"
+    assert [b["amountInCents"] for b in bookings_on_collection(fake)] == [-1299, -8462, 750]
+    assert fake.transactions[0]["isFullyReconciled"]

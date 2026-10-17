@@ -421,7 +421,7 @@ def test_unmatched_credit_is_a_line(tmp_path):
 # tests/test_server_split.py
 async def test_book_split_books_a_credit_last(...):
     # statement: credit "SHOP A" +7,50 first in the file, then ACME -12,99 and CLOUD -84,62;
-    # collection -8911. Booked amounts in order: [-1299, -8462, 750]; status "booked"
+    # collection -9011. Booked amounts in order: [-1299, -8462, 750]; status "booked"
 ```
 
 - [ ] **Step 2: Run them to see them fail**

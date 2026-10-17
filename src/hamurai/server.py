@@ -492,7 +492,8 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
             raise ToolError(f"Transaction {transaction_id} is already booked; nothing is booked.")
 
         by_number = {line.number: line for line in statement.lines}
-        chosen = sorted(lines, key=lambda line: line.line)
+        # Credits last: the last one's create then already gets exactly its own amount.
+        chosen = sorted(lines, key=lambda c: (by_number[c.line].amount_cents > 0, c.line))
         made: list[SplitBooking] = []
         failure: Exception | None = None
         # Only a create without an answer can leave a booking nobody knows the ID of.
