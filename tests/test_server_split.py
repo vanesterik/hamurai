@@ -1,6 +1,7 @@
 import re
 from datetime import date
 
+import anyio
 import httpx
 import pytest
 from fake_api import make_transaction
@@ -277,10 +278,22 @@ async def test_unknown_create_outcome_is_incomplete(client, fake, path, statemen
     async with connected(client, path) as session:
         result = await book_split(session, statement)
 
+    # Nothing was made, and looking at the collection afterwards shows it.
+    data = result.structured_content
+    assert data["status"] == "rolled_back"
+    assert "nothing is booked" in data["message"]
+    assert bookings_on_collection(fake) == []
+
+
+async def test_unknown_create_outcome_unchecked_is_incomplete(client, fake, path, statement):
+    fake.fail_creates = [None, httpx.ReadTimeout("timeout")]
+    fake.fail_routes["/reconciliations"] = [httpx.ConnectError("down")] * 2
+    async with connected(client, path) as session:
+        result = await book_split(session, statement)
+
     data = result.structured_content
     assert data["status"] == "incomplete"
     assert "check the collection" in data["message"]
-    assert bookings_on_collection(fake) == []
 
 
 async def test_session_expiry_mid_split(client, fake, path, statement):
@@ -316,3 +329,95 @@ async def test_unknown_update_outcome_still_rolls_back(client, fake, path, state
     assert data["status"] == "rolled_back"
     assert "nothing is booked" in data["message"]
     assert bookings_on_collection(fake) == []
+
+
+async def test_create_applied_but_answered_504_is_reported(client, fake, path, statement):
+    fake.fail_creates = [None, ("after", 504)]
+    async with connected(client, path) as session:
+        result = await book_split(session, statement)
+
+    data = result.structured_content
+    assert data["status"] == "incomplete"
+    [left] = bookings_on_collection(fake)
+    assert data["left_behind"] == [left["id"]]
+    assert "nothing is booked" not in data["message"]
+
+
+async def test_update_applied_but_answer_lost_still_rolls_back(client, fake, path, statement):
+    fake.fail_updates = [("after", httpx.ReadTimeout("timeout"))]
+    async with connected(client, path) as session:
+        result = await book_split(session, statement)
+
+    assert result.structured_content["status"] == "rolled_back"
+    assert bookings_on_collection(fake) == []
+
+
+async def test_deleted_meanwhile_counts_as_deleted(client, fake, path, statement):
+    fake.fail_updates = [500]
+    fake.fail_deletes = [("after", 404)]
+    async with connected(client, path) as session:
+        result = await book_split(session, statement)
+
+    data = result.structured_content
+    assert (data["status"], data["left_behind"]) == ("rolled_back", [])
+
+
+async def test_cancelled_split_rolls_back(client, fake, path, statement):
+    async with connected(client, path) as session:
+        proposed = await propose(session, statement)
+        assert not proposed.is_error
+        # Each request takes 50 ms; the call is cancelled after the first create.
+        fake.delay = 0.05
+        with anyio.move_on_after(0.12):
+            await session.call_tool("book_split", {"transaction_id": COLLECTION, "lines": BOTH})
+        made = [r for r in fake.requests if r.method == "POST"]
+        await anyio.sleep(0.5)
+
+    assert made, "the call was cancelled before it booked anything"
+    assert bookings_on_collection(fake) == []
+    assert any(r.method == "DELETE" for r in fake.requests)
+
+
+async def test_parallel_book_splits_book_once(client, fake, path, statement):
+    results = []
+    async with connected(client, path) as session:
+        proposed = await propose(session, statement)
+        assert not proposed.is_error
+        fake.delay = 0.01
+
+        async def call() -> None:
+            results.append(
+                await session.call_tool("book_split", {"transaction_id": COLLECTION, "lines": BOTH})
+            )
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(call)
+            group.start_soon(call)
+
+    assert sorted(r.is_error for r in results) == [False, True]
+    assert [b["amountInCents"] for b in bookings_on_collection(fake)] == [-1299, -8462]
+
+
+async def test_a_changed_remainder_stops_the_split(client, fake, path, statement):
+    async with connected(client, path) as session:
+        proposed = await propose(session, statement)
+        assert not proposed.is_error
+        # Booked in the web app after the check, before the first create: the create
+        # then gets a remainder of 0.
+        fake.fail_creates = [None]
+        original = fake.add_booking
+
+        def booked_meanwhile(transaction_id, category_id, vat_code_id):
+            fake.add_booking = original
+            original(transaction_id, category_id, vat_code_id)
+            return original(transaction_id, category_id, vat_code_id)
+
+        fake.add_booking = booked_meanwhile
+        result = await session.call_tool(
+            "book_split", {"transaction_id": COLLECTION, "lines": BOTH}
+        )
+
+    data = result.structured_content
+    assert data["status"] == "incomplete"
+    [left] = bookings_on_collection(fake)
+    assert data["left_behind"] == [left["id"]]

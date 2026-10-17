@@ -14,6 +14,8 @@ ADMINISTRATION_ID = 11111
 JOURNAL_ID = 22222
 PREFIX = f"/api/v2/administrations/{ADMINISTRATION_ID}"
 
+type Failure = BaseException | int | tuple[str, BaseException | int] | None
+
 CATEGORIES = [
     {"id": 10, "code": "4500", "name": "Kantoorkosten", "type": "COSTS"},
     {"id": 11, "code": "4600", "name": "Reiskosten", "type": "COSTS"},
@@ -58,10 +60,11 @@ class FakeHamurai:
         self.fail_next: list[Exception | int] = []
         self.fail_posts: list[Exception | int | httpx.Response] = []
         self.fail_routes: dict[str, list[Exception | int]] = {}
-        # One entry per request on that route; None lets the request through.
-        self.fail_creates: list[Exception | int | None] = []
-        self.fail_updates: list[Exception | int | None] = []
-        self.fail_deletes: list[Exception | int | None] = []
+        # One entry per request on that route; None lets the request through, and
+        # ("after", failure) applies the request before failing, as when an answer is lost.
+        self.fail_creates: list[Failure] = []
+        self.fail_updates: list[Failure] = []
+        self.fail_deletes: list[Failure] = []
         self.delay = 0.0
         self.in_flight = 0
         self.max_in_flight = 0
@@ -163,11 +166,19 @@ class FakeHamurai:
         try:
             if self.delay:
                 await anyio.sleep(self.delay)
+            failure = self._own_failure(request)
+            if isinstance(failure, tuple):
+                self._respond(request)
+                failure = failure[1]
+            if isinstance(failure, BaseException):
+                raise failure
+            if failure is not None:
+                return _error(failure, f"Fake error {failure}")
             return self._respond(request)
         finally:
             self.in_flight -= 1
 
-    def _respond(self, request: httpx.Request) -> httpx.Response:
+    def _own_failure(self, request: httpx.Request) -> Failure:
         route = request.url.path.removeprefix(PREFIX)
         booking_route = re.fullmatch(r"/reconciliations/\d+", route) is not None
         own = (
@@ -179,12 +190,10 @@ class FakeHamurai:
             if request.method == "DELETE" and booking_route
             else None
         )
-        if own:
-            failure = own.pop(0)
-            if isinstance(failure, Exception):
-                raise failure
-            if failure is not None:
-                return _error(failure, f"Fake error {failure}")
+        return own.pop(0) if own else None
+
+    def _respond(self, request: httpx.Request) -> httpx.Response:
+        route = request.url.path.removeprefix(PREFIX)
         failures = self.fail_posts if request.method == "POST" else self.fail_routes.get(route, [])
         if self.fail_next or failures:
             failure = (self.fail_next or failures).pop(0)

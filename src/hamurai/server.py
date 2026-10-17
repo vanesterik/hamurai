@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal
 
+import anyio
 import httpx
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
@@ -454,6 +455,22 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
                 if found
             ]
             raise ToolError(f"Book every line exactly once: {'; '.join(problems)}.")
+        # Claimed before the first await, so a parallel call is refused. Given back unless
+        # the split is booked, so that it can be tried again.
+        state.split = None
+        try:
+            result = await split(collection, statement, lines)
+        except BaseException:
+            state.split = (collection, statement)
+            raise
+        if result.status != "booked":
+            state.split = (collection, statement)
+        return result
+
+    async def split(
+        collection: Transaction, statement: Statement, lines: list[SplitLine]
+    ) -> SplitResult:
+        transaction_id = collection.id
         with tool_errors():
             labels = await state.labels()
             unknown = sorted(
@@ -480,35 +497,53 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
         failure: Exception | None = None
         # Only a create without an answer can leave a booking nobody knows the ID of.
         create_unknown = False
-        for choice in chosen:
-            line = by_number[choice.line]
-            try:
-                created = await client.create_booking(
-                    transaction_id, choice.category_id, choice.vat_code_id
-                )
-            except Exception as exc:
-                failure = exc
-                create_unknown = not isinstance(exc, HamuraiError | SessionExpired)
-                break
-            made.append(SplitBooking(line=line.number, booking_id=created.id))
-            try:
-                await client.update_booking(
-                    created.id,
-                    transaction_id,
-                    amount_cents=line.amount_cents,
-                    category_id=choice.category_id,
-                    vat_code_id=choice.vat_code_id,
-                    description=line.description,
-                    entry_date=collection.entry_date,
-                )
-            except Exception as exc:
-                failure = exc
-                break
+        # A new booking gets the collection's unbooked remainder: anything else means the
+        # collection changed while it was being split.
+        remainder = current.amount_cents
+        try:
+            for choice in chosen:
+                line = by_number[choice.line]
+                try:
+                    created = await client.create_booking(
+                        transaction_id, choice.category_id, choice.vat_code_id
+                    )
+                except HamuraiError as exc:
+                    # A gateway error may come after the booking was made.
+                    failure, create_unknown = exc, exc.status >= 500
+                    break
+                except SessionExpired as exc:
+                    failure = exc
+                    break
+                except Exception as exc:
+                    failure, create_unknown = exc, True
+                    break
+                made.append(SplitBooking(line=line.number, booking_id=created.id))
+                if created.amount_cents != remainder:
+                    failure = CollectionChanged()
+                    break
+                try:
+                    await client.update_booking(
+                        created.id,
+                        transaction_id,
+                        amount_cents=line.amount_cents,
+                        category_id=choice.category_id,
+                        vat_code_id=choice.vat_code_id,
+                        description=line.description,
+                        entry_date=collection.entry_date,
+                    )
+                except Exception as exc:
+                    failure = exc
+                    break
+                remainder -= line.amount_cents
+        except BaseException:
+            # Cancelled partway: still undo what was made, then give up.
+            with anyio.move_on_after(30, shield=True):
+                await _roll_back(client, transaction_id, made, None, create_unknown=True)
+            raise
 
         if failure is not None:
-            return await _roll_back(client, made, failure, create_unknown)
+            return await _roll_back(client, transaction_id, made, failure, create_unknown)
 
-        state.split = None
         message = None
         try:
             for choice, made_booking in zip(chosen, made, strict=True):
@@ -557,41 +592,66 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
     return mcp
 
 
+class CollectionChanged(Exception):
+    """A new booking didn't get the expected remainder: the collection was booked meanwhile."""
+
+
 async def _roll_back(
-    client: HamuraiClient, made: list[SplitBooking], failure: Exception, create_unknown: bool
+    client: HamuraiClient,
+    transaction_id: int,
+    made: list[SplitBooking],
+    failure: Exception | None,
+    create_unknown: bool,
 ) -> SplitResult:
-    """Delete every booking a stopped split made, newest first, and say what is left."""
+    """Delete every booking a stopped split made, newest first, then look at what is left."""
     expired = isinstance(failure, SessionExpired)
-    left_behind = []
+    not_deleted = []
     for made_booking in reversed(made):
         try:
             await client.delete_booking(made_booking.booking_id)
+        except HamuraiError as exc:
+            # Gone already, deleted in the web app or by a delete whose answer was lost.
+            if exc.status != 404:
+                not_deleted.append(made_booking.booking_id)
         except SessionExpired:
             expired = True
-            left_behind.append(made_booking.booking_id)
+            not_deleted.append(made_booking.booking_id)
         except Exception:
-            left_behind.append(made_booking.booking_id)
-    left_behind.reverse()
-    if isinstance(failure, HamuraiError):
+            not_deleted.append(made_booking.booking_id)
+    not_deleted.reverse()
+    # The collection was unbooked when the split started, so whatever is on it now is left.
+    try:
+        left_behind = [b.id for b in await client.bookings_for(transaction_id)]
+        checked = True
+    except SessionExpired:
+        expired, checked, left_behind = True, False, not_deleted
+    except Exception:
+        checked, left_behind = False, not_deleted
+
+    if failure is None:
+        reason = "The split was cancelled."
+    elif isinstance(failure, HamuraiError):
         reason = f"The split stopped: {failure}."
+    elif isinstance(failure, CollectionChanged):
+        reason = "The split stopped: the collection was booked while it was being split."
     elif isinstance(failure, SessionExpired):
         reason = "The split stopped."
     else:
         reason = "The split stopped: no answer from Hamurai."
     notes = [reason]
+    unsure = bool(left_behind) or (create_unknown and not checked)
     if left_behind:
         notes.append(
-            f"These bookings could not be deleted: {left_behind}. Remove them with "
+            f"These bookings are still on the collection: {left_behind}. Remove them with "
             "undo_booking or in the web app."
         )
-    elif not create_unknown:
+    elif not unsure:
         notes.append("Every booking it made was deleted again; nothing is booked.")
-    if create_unknown:
+    if create_unknown and not checked:
         notes.append(
             "A booking may have been made without an answer: check the collection in "
             "Hamurai, where propose_bookings lists it as skipped if something was left."
         )
-    unsure = bool(left_behind) or create_unknown
     message = " ".join(notes)
     if expired:
         message = f"{SESSION_EXPIRED} {message}"
