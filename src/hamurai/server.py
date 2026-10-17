@@ -22,6 +22,7 @@ from hamurai.client import HamuraiClient, HamuraiError, SessionExpired
 from hamurai.config import ConfigError, load_config
 from hamurai.matcher import Labels, LineProposal, ProposalSet, propose_all, propose_line
 from hamurai.models import Booking, Category, Transaction, VatCode
+from hamurai.receipts import ReceiptProposal, match, targets
 from hamurai.seeding import DraftEntry, Resolution, UnresolvedError, build_draft, resolve, seedable
 from hamurai.statement import LeftOut, Statement, StatementError, read_statement
 from hamurai.suggestions import SUGGESTIONS_PATH, Entry, SuggestionsFileError, load, save
@@ -34,6 +35,8 @@ SESSION_EXPIRED = (
 READ_ONLY = ToolAnnotations(read_only_hint=True)
 # How long after a statement's last booking date its collection may come.
 COLLECTION_WINDOW = timedelta(days=45)
+# A receipt is uploaded after its date, which lies at most ~45 days before its expense.
+RECEIPT_LOOKBACK = timedelta(days=45)
 
 
 class ProposeResult(BaseModel):
@@ -126,6 +129,7 @@ class State:
     proposed: dict[int, Transaction] = field(default_factory=dict)
     draft: list[DraftEntry] | None = None
     split: tuple[Transaction, Statement] | None = None
+    receipts: ReceiptProposal | None = None
     categories: list[Category] | None = None
     vat_codes: list[VatCode] | None = None
 
@@ -252,6 +256,28 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
             left_out=statement.left_out,
             total_cents=statement.total_cents,
         )
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def propose_receipts(start_date: date, end_date: date) -> ReceiptProposal:
+        """Propose which unlinked receipt belongs to which expense in the period.
+
+        Never writes anything. Matches by the amount and date Hamurai read from each
+        receipt, against every expense, booked or not: bank transactions without files, and
+        each line of a split (a receipt for a split line is linked to the split transaction).
+        Amounts are in cents; a receipt's is positive. Show the confident pairs as one table
+        and each ambiguous group one at a time, where the user picks one pair or none; then
+        call link_receipts.
+        """
+        if end_date < start_date:
+            raise ToolError("end_date is before start_date")
+        state.receipts = None
+        with tool_errors():
+            transactions = await client.transactions(start_date, end_date)
+            split_ids = [t.id for t in transactions if t.number_of_reconciliations > 1]
+            splits = await client.bookings_for_many(split_ids)
+            files = await client.files(start_date - RECEIPT_LOOKBACK)
+        state.receipts = match(targets(transactions, splits), files)
+        return state.receipts
 
     @mcp.tool(annotations=READ_ONLY)
     async def seed_suggestions(ctx: Context) -> SeedSummary:
