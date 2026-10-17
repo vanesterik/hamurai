@@ -1,3 +1,4 @@
+import re
 from datetime import date
 
 import httpx
@@ -99,13 +100,15 @@ async def test_propose_split_with_two_candidates(client, fake, path, statement):
     "spelling",
     [
         lambda p: str(p),
-        lambda p: str(p).replace(" ", "\\ "),
+        lambda p: re.sub(r"([ '()])", r"\\\1", str(p)),
         lambda p: f"'{p}'",
         lambda p: f' "{p}" ',
     ],
 )
 async def test_propose_split_accepts_a_dragged_path(client, path, tmp_path, spelling):
-    statement = write_statement(tmp_path, [PAYMENT, ACME, CLOUD], name="My Statements/card.csv")
+    statement = write_statement(
+        tmp_path, [PAYMENT, ACME, CLOUD], name="My Statements/J's card (1).csv"
+    )
     async with connected(client, path) as session:
         result = await session.call_tool("propose_split", {"statement_path": spelling(statement)})
 

@@ -1,6 +1,7 @@
 """The MCP tools. They connect the other units and hold no logic of their own."""
 
 import logging
+import re
 import sys
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -154,11 +155,14 @@ def tool_errors() -> Generator[None]:
 
 
 def statement_file(text: str) -> Path:
-    """A path as typed or dragged into the terminal: quoted, or with escaped spaces."""
+    """A path as typed or dragged into the terminal: quoted, or with shell escapes such as
+    `\\ ` and `\\(`."""
     text = text.strip()
     if len(text) > 1 and text[0] == text[-1] and text[0] in "'\"":
         text = text[1:-1]
-    return Path(text.replace("\\ ", " ")).expanduser()
+    else:
+        text = re.sub(r"\\(.)", r"\1", text)
+    return Path(text).expanduser()
 
 
 def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PATH) -> MCPServer:
