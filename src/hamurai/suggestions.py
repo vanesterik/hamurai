@@ -105,8 +105,17 @@ class Suggestions(BaseModel):
 
     def record(self, transaction: Transaction, booking: Booking) -> bool:
         """Learn a booking. False when the transaction has neither an IBAN nor a name."""
-        iban = normalize_iban(transaction.counter_account.number)
-        name = transaction.counter_account.name_account_holder
+        return self.learn(
+            iban=transaction.counter_account.number,
+            name=transaction.counter_account.name_account_holder,
+            booking=booking,
+            on=transaction.entry_date,
+        )
+
+    def learn(self, *, iban: str | None, name: str | None, booking: Booking, on: date) -> bool:
+        """Learn a booking by IBAN and name, such as a card line's merchant. False without
+        either."""
+        iban = normalize_iban(iban)
         if iban is None and normalize_name(name) is None:
             return False
         entry = self.by_iban(iban)
@@ -125,7 +134,7 @@ class Suggestions(BaseModel):
                 id=booking.id,
                 category_id=booking.category_id,
                 vat_code_id=booking.vat_code_id,
-                date=transaction.entry_date,
+                date=on,
             )
         )
         return True

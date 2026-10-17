@@ -3,8 +3,9 @@ from datetime import date
 import pytest
 from test_suggestions import IBAN, booking, tx
 
-from hamurai.matcher import Confidence, Labels, propose, propose_all
+from hamurai.matcher import Confidence, Labels, propose, propose_all, propose_line
 from hamurai.models import Transaction
+from hamurai.statement import StatementLine
 from hamurai.suggestions import Entry, LearnedBooking, Pattern, Suggestions
 
 LABELS = Labels(
@@ -154,3 +155,54 @@ def test_always_ask_is_uncertain_with_the_latest_pair_and_history():
         "IBAN match, always ask; last booked as 4500 Kantoorkosten / 21% hoog on 2026-03-01; "
         "history 3× 4500 Kantoorkosten / 21% hoog; 3× 4600 Reiskosten / 21% hoog"
     )
+
+
+def card_line(description: str) -> StatementLine:
+    return StatementLine(
+        number=1,
+        transaction_date=date(2026, 8, 30),
+        booking_date=date(2026, 8, 31),
+        description=description,
+        amount_cents=-1299,
+    )
+
+
+MERCHANT = entry(None, "Acme Software", (3, 10, "2026-01-01"))
+ASK = entry(None, "Marketplace", (1, 10, "2026-01-01"), (1, 11, "2026-02-01")).model_copy(
+    update={"always_ask": True}
+)
+CARD_SUGGESTIONS = Suggestions(
+    entries=[MERCHANT, ASK],
+    patterns=[Pattern(contains="cloud", category_id=11, vat_code_id=20)],
+)
+
+
+def test_line_name_match_is_confident():
+    proposal = propose_line(card_line("Acme Software"), CARD_SUGGESTIONS, LABELS)
+    assert proposal.confidence is Confidence.CONFIDENT
+    assert (proposal.category_id, proposal.vat_code_id) == (10, 20)
+    assert proposal.evidence.startswith("Merchant match")
+    assert proposal.line.description == "Acme Software"
+
+
+def test_line_name_match_ignores_case_and_spacing():
+    proposal = propose_line(card_line("ACME  SOFTWARE"), CARD_SUGGESTIONS, LABELS)
+    assert proposal.confidence is Confidence.CONFIDENT
+
+
+def test_line_always_ask_is_uncertain():
+    proposal = propose_line(card_line("MARKETPLACE"), CARD_SUGGESTIONS, LABELS)
+    assert proposal.confidence is Confidence.UNCERTAIN
+    assert "always ask" in proposal.evidence
+
+
+def test_line_pattern_is_uncertain():
+    proposal = propose_line(card_line("EXAMPLE CLOUD HOSTING"), CARD_SUGGESTIONS, LABELS)
+    assert proposal.confidence is Confidence.UNCERTAIN
+    assert (proposal.category_id, proposal.vat_code_id) == (11, 20)
+
+
+def test_line_without_a_match_is_unknown():
+    proposal = propose_line(card_line("SOMEWHERE ELSE"), CARD_SUGGESTIONS, LABELS)
+    assert proposal.confidence is Confidence.UNKNOWN
+    assert (proposal.category_id, proposal.vat_code_id) == (None, None)

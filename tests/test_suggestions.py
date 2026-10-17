@@ -204,3 +204,23 @@ def test_always_ask_is_left_out_of_the_file_when_false(tmp_path):
     save(learned(10), path)
 
     assert "always_ask" not in path.read_text()
+
+
+def test_learn_by_name_only():
+    suggestions = Suggestions()
+
+    assert suggestions.learn(
+        iban=None, name="ACME SOFTWARE", booking=booking(7), on=date(2026, 8, 30)
+    )
+
+    entry = suggestions.by_name("acme software")
+    assert entry is not None and entry.iban is None
+    assert [(b.id, b.category_id, b.vat_code_id, b.date) for b in entry.bookings] == [
+        (7, 10, 20, date(2026, 8, 30))
+    ]
+    assert suggestions.forget(7)
+    assert suggestions.by_name("acme software") is None
+
+
+def test_learn_without_iban_or_name_is_refused():
+    assert not Suggestions().learn(iban=None, name=" ", booking=booking(7), on=date(2026, 8, 30))
