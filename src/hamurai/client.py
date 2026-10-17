@@ -12,7 +12,7 @@ import anyio
 import httpx
 
 from hamurai.config import Config
-from hamurai.models import Booking, Category, Transaction, VatCode
+from hamurai.models import Booking, Category, File, Transaction, VatCode
 
 BASE_URL = "https://app.hamurai.example"
 PAGE_SIZE = 500
@@ -71,6 +71,37 @@ class HamuraiClient:
             if body["page"]["last"]:
                 return transactions
             page += 1
+
+    async def files(self, since: date) -> list[File]:
+        """The files, newest first, back to the first page holding one created before `since`.
+
+        Hamurai pages them by `offset`, 100 at a time, and ignores page sizes and filters.
+        """
+        files: list[File] = []
+        while True:
+            page = [
+                File.model_validate(f) for f in await self._get("/files", {"offset": len(files)})
+            ]
+            files += page
+            if not page or any(f.created_at.date() < since for f in page):
+                return files
+
+    async def attach_file(self, file_id: int, transaction_id: int) -> File:
+        """Link a file, such as a receipt, to a bank transaction."""
+        # Never retried, like a booking.
+        try:
+            response = await self._http.post(
+                f"{self._prefix}/files/{file_id}/attach", json={"transactionId": transaction_id}
+            )
+        except httpx.ConnectError:
+            raise HamuraiError(0, "could not connect to Hamurai") from None
+        except httpx.TransportError:
+            raise BookingOutcomeUnknown() from None
+        _checked(response)
+        try:
+            return File.model_validate(response.json())
+        except ValueError:
+            raise BookingOutcomeUnknown() from None
 
     async def bookings_for(self, transaction_id: int) -> list[Booking]:
         """The bookings onto a category; others (e.g. onto an invoice) are left out."""

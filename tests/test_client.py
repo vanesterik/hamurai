@@ -1,10 +1,10 @@
 import json
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import httpx
 import pytest
 from conftest import COOKIE
-from fake_api import make_transaction
+from fake_api import make_file, make_transaction
 
 from hamurai.client import BookingOutcomeUnknown, HamuraiError, SessionExpired
 
@@ -293,3 +293,108 @@ async def test_update_booking_is_never_retried(client, fake):
 
     updates = [r for r in fake.requests if r.url.path.endswith(f"/reconciliations/{booking.id}")]
     assert len(updates) == 1
+
+
+async def test_files_reads_receipts(client, fake):
+    fake.files.append(
+        make_file(1, created_at="2026-07-01T10:19:43", amount_cents=875, receipt_date="2026-07-01")
+    )
+
+    [file] = await client.files(date(2026, 1, 1))
+
+    assert (file.id, file.amount_cents, file.receipt_date) == (1, 875, date(2026, 7, 1))
+    assert not file.is_linked
+    assert "SECRET-FILE" not in file.model_dump_json()
+
+
+async def test_files_pages_by_offset_until_the_date(client, fake):
+    start = datetime(2026, 10, 1, 12, 0)
+    fake.files += [
+        make_file(i, created_at=(start - timedelta(days=i)).isoformat()) for i in range(250)
+    ]
+
+    files = await client.files((start - timedelta(days=150)).date())
+
+    offsets = [r.url.params.get("offset", "0") for r in fake.requests]
+    assert offsets == ["0", "100"]
+    assert len(files) == 200
+
+
+async def test_files_stops_on_an_empty_page(client, fake):
+    fake.files += [make_file(i, created_at="2026-09-01T10:00:00") for i in range(100)]
+
+    files = await client.files(date(2026, 1, 1))
+
+    assert len(files) == 100
+    assert [r.url.params.get("offset", "0") for r in fake.requests] == ["0", "100"]
+
+
+async def test_archived_file_is_not_unlinked(client, fake):
+    fake.files.append(
+        make_file(1, created_at="2026-07-01T10:00:00", archived_at="2026-08-01T10:00:00")
+    )
+
+    [file] = await client.files(date(2026, 1, 1))
+
+    assert file.is_linked
+
+
+async def test_linked_file(client, fake):
+    fake.files.append(make_file(1, created_at="2026-07-01T10:00:00", transaction_id=7))
+
+    [file] = await client.files(date(2026, 1, 1))
+
+    assert file.is_linked and file.transaction_id == 7
+
+
+async def test_file_without_metadata(client, fake):
+    fake.files += [
+        make_file(1, created_at="2026-07-01T10:00:00"),
+        {**make_file(2, created_at="2026-07-01T09:00:00"), "metadata": {}},
+    ]
+
+    files = await client.files(date(2026, 1, 1))
+
+    assert [(f.amount_cents, f.receipt_date) for f in files] == [(None, None), (None, None)]
+
+
+async def test_attach_file_sends_the_transaction(client, fake):
+    fake.transactions.append(make_transaction(1, iban=None, name="Shop"))
+    fake.files.append(make_file(5, created_at="2026-07-01T10:00:00", amount_cents=1000))
+
+    file = await client.attach_file(5, 1)
+
+    assert fake.requests[-1].url.path.endswith("/files/5/attach")
+    assert json.loads(fake.requests[-1].content) == {"transactionId": 1}
+    assert file.transaction_id == 1 and file.is_linked
+    [transaction] = await client.transactions()
+    assert transaction.has_files
+
+
+async def test_attach_file_is_never_retried(client, fake):
+    fake.transactions.append(make_transaction(1, iban=None, name="Shop"))
+    fake.files.append(make_file(5, created_at="2026-07-01T10:00:00", amount_cents=1000))
+    fake.fail_attaches = [httpx.ReadTimeout("timeout")]
+
+    with pytest.raises(BookingOutcomeUnknown):
+        await client.attach_file(5, 1)
+
+    assert len([r for r in fake.requests if r.url.path.endswith("/attach")]) == 1
+
+
+async def test_booking_description(client, fake):
+    fake.transactions.append(make_transaction(1, iban=None, name="Card", amount=-9761))
+    booking = await client.create_booking(1, 10, 20)
+    await client.update_booking(
+        booking.id,
+        1,
+        amount_cents=-1299,
+        category_id=10,
+        vat_code_id=20,
+        description="ACME SOFTWARE",
+        entry_date=date(2026, 9, 21),
+    )
+
+    [read] = await client.bookings_for(1)
+
+    assert read.description == "ACME SOFTWARE"

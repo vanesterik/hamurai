@@ -45,6 +45,44 @@ def make_transaction(
         "isFullyReconciled": False,
         "numberOfReconciliations": 0,
         "hasSuggestions": False,
+        "hasFiles": False,
+    }
+
+
+def make_file(
+    id: int,
+    *,
+    created_at: str,
+    amount_cents: int | None = None,
+    receipt_date: str | None = None,
+    transaction_id: int | None = None,
+    archived_at: str | None = None,
+) -> dict[str, Any]:
+    """A file as the files list returns it. Without an amount or date, metadata is null."""
+    metadata = None
+    if amount_cents is not None or receipt_date is not None:
+        metadata = {"ocrResultId": 1, "amountInCents": amount_cents, "date": receipt_date}
+    return {
+        "id": id,
+        "administrationId": ADMINISTRATION_ID,
+        "createdAt": created_at,
+        "createdByUsername": "Test User",
+        "name": f"Scan {id}",
+        "mimeType": "image/jpeg",
+        "sizeInBytes": 1000,
+        "metadata": metadata,
+        "secret": "SECRET-FILE",
+        "archivedAt": archived_at,
+        "transactionId": transaction_id,
+        "invoiceId": None,
+        "orderId": None,
+        "reminderId": None,
+        "estimateId": None,
+        "journalRecordId": None,
+        "billableItemSheetId": None,
+        "bankTransactionImportId": None,
+        "type": "STANDARD_FILE",
+        "status": "PROCESSED",
     }
 
 
@@ -65,6 +103,8 @@ class FakeHamurai:
         self.fail_creates: list[Failure] = []
         self.fail_updates: list[Failure] = []
         self.fail_deletes: list[Failure] = []
+        self.fail_attaches: list[Failure] = []
+        self.files: list[dict[str, Any]] = []
         self.delay = 0.0
         self.in_flight = 0
         self.max_in_flight = 0
@@ -188,6 +228,8 @@ class FakeHamurai:
             if request.method == "POST" and booking_route
             else self.fail_deletes
             if request.method == "DELETE" and booking_route
+            else self.fail_attaches
+            if request.method == "POST" and route.endswith("/attach")
             else None
         )
         return own.pop(0) if own else None
@@ -226,6 +268,19 @@ class FakeHamurai:
                 b for b in self.bookings.values() if b["transactionInfo"]["id"] == transaction_id
             ]
             return httpx.Response(200, json=found)
+        if request.method == "GET" and route == "/files":
+            ordered = sorted(self.files, key=lambda f: f["createdAt"], reverse=True)
+            offset = int(params.get("offset", "0"))
+            return httpx.Response(200, json=ordered[offset : offset + 100])
+        if request.method == "POST" and (match := re.fullmatch(r"/files/(\d+)/attach", route)):
+            file = next((f for f in self.files if f["id"] == int(match[1])), None)
+            body = json.loads(request.content)
+            transaction = self._transaction(body["transactionId"])
+            if file is None or transaction is None:
+                return _error(404, "Unknown file or transaction")
+            file["transactionId"] = transaction["id"]
+            transaction["hasFiles"] = True
+            return httpx.Response(200, json=file)
         if request.method == "GET" and route == "/general-ledger-accounts":
             return httpx.Response(200, json=self.categories)
         if request.method == "GET" and route == "/vat-codes":
