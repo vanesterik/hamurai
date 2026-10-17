@@ -144,6 +144,42 @@ class HamuraiClient:
         except ValueError:
             raise BookingOutcomeUnknown() from None
 
+    async def update_booking(
+        self,
+        booking_id: int,
+        transaction_id: int,
+        *,
+        amount_cents: int,
+        category_id: int,
+        vat_code_id: int,
+        description: str,
+        entry_date: date,
+    ) -> Booking:
+        """Set a booking's amount, as the web app does when splitting a transaction."""
+        body = {
+            "amount": amount_cents,
+            "generalLedgerAccountId": category_id,
+            "vatCodeId": vat_code_id,
+            "description": description,
+            "entryDate": entry_date.isoformat(),
+        }
+        # Never retried, like a create.
+        try:
+            response = await self._http.post(
+                f"{self._prefix}/reconciliations/{booking_id}", json=body
+            )
+        except httpx.ConnectError:
+            raise HamuraiError(0, "could not connect to Hamurai") from None
+        except httpx.TransportError:
+            raise BookingOutcomeUnknown() from None
+        _checked(response)
+        try:
+            return Booking.model_validate(
+                {"transactionInfo": {"id": transaction_id}, **response.json()}
+            )
+        except ValueError:
+            raise BookingOutcomeUnknown() from None
+
     async def delete_booking(self, booking_id: int) -> None:
         try:
             response = await self._http.delete(f"{self._prefix}/reconciliations/{booking_id}")

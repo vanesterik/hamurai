@@ -58,6 +58,10 @@ class FakeHamurai:
         self.fail_next: list[Exception | int] = []
         self.fail_posts: list[Exception | int | httpx.Response] = []
         self.fail_routes: dict[str, list[Exception | int]] = {}
+        # One entry per request on that route; None lets the request through.
+        self.fail_creates: list[Exception | int | None] = []
+        self.fail_updates: list[Exception | int | None] = []
+        self.fail_deletes: list[Exception | int | None] = []
         self.delay = 0.0
         self.in_flight = 0
         self.max_in_flight = 0
@@ -67,9 +71,15 @@ class FakeHamurai:
         return httpx.MockTransport(self._handle)
 
     def add_booking(self, transaction_id: int, category_id: int, vat_code_id: int) -> int:
-        """Book a transaction directly, as if done in the web app. Returns the booking ID."""
+        """Book a transaction directly, as if done in the web app. Returns the booking ID.
+
+        Like Hamurai, a new booking gets the transaction's whole unbooked remainder.
+        """
         transaction = self._transaction(transaction_id)
         assert transaction is not None
+        remainder = transaction["amount"] - sum(
+            b["amountInCents"] for b in self._bookings_on(transaction_id)
+        )
         self._next_booking_id += 1
         booking_id = self._next_booking_id
         category = next(c for c in self.categories if c["id"] == category_id)
@@ -90,13 +100,41 @@ class FakeHamurai:
                 "name": category["name"],
             },
             "entryDate": transaction["entryDate"],
-            "amountInCents": transaction["amount"],
+            "amountInCents": remainder,
             "description": transaction["description"],
             "vatCode": dict(vat_code),
         }
-        transaction["numberOfReconciliations"] += 1
-        transaction["isFullyReconciled"] = True
+        self._reconcile(transaction)
         return booking_id
+
+    def update_booking(self, booking_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        booking = self.bookings[booking_id]
+        category = next(c for c in self.categories if c["id"] == body["generalLedgerAccountId"])
+        vat_code = next(v for v in self.vat_codes if v["id"] == body["vatCodeId"])
+        booking["amountInCents"] = body["amount"]
+        booking["generalLedgerAccountInfo"] = {
+            "id": category["id"],
+            "type": category["type"],
+            "name": category["name"],
+        }
+        booking["vatCode"] = dict(vat_code)
+        booking["description"] = body["description"]
+        booking["entryDate"] = body["entryDate"]
+        transaction = self._transaction(booking["transactionInfo"]["id"])
+        assert transaction is not None
+        self._reconcile(transaction)
+        return booking
+
+    def _bookings_on(self, transaction_id: int) -> list[dict[str, Any]]:
+        return [b for b in self.bookings.values() if b["transactionInfo"]["id"] == transaction_id]
+
+    def _reconcile(self, transaction: dict[str, Any]) -> None:
+        """Fully reconciled once the bookings add up to the transaction's amount."""
+        bookings = self._bookings_on(transaction["id"])
+        transaction["numberOfReconciliations"] = len(bookings)
+        transaction["isFullyReconciled"] = bool(bookings) and (
+            sum(b["amountInCents"] for b in bookings) == transaction["amount"]
+        )
 
     def add_other_booking(self, transaction_id: int) -> int:
         """Reconcile a transaction against something other than a category, e.g. an invoice."""
@@ -131,6 +169,22 @@ class FakeHamurai:
 
     def _respond(self, request: httpx.Request) -> httpx.Response:
         route = request.url.path.removeprefix(PREFIX)
+        booking_route = re.fullmatch(r"/reconciliations/\d+", route) is not None
+        own = (
+            self.fail_creates
+            if request.method == "POST" and route == "/reconciliations"
+            else self.fail_updates
+            if request.method == "POST" and booking_route
+            else self.fail_deletes
+            if request.method == "DELETE" and booking_route
+            else None
+        )
+        if own:
+            failure = own.pop(0)
+            if isinstance(failure, Exception):
+                raise failure
+            if failure is not None:
+                return _error(failure, f"Fake error {failure}")
         failures = self.fail_posts if request.method == "POST" else self.fail_routes.get(route, [])
         if self.fail_next or failures:
             failure = (self.fail_next or failures).pop(0)
@@ -177,14 +231,19 @@ class FakeHamurai:
             # The spec records no transactionInfo in the POST response; only the GET has it.
             created = {k: v for k, v in self.bookings[booking_id].items() if k != "transactionInfo"}
             return httpx.Response(201, json=created)
+        if request.method == "POST" and (match := re.fullmatch(r"/reconciliations/(\d+)", route)):
+            if int(match[1]) not in self.bookings:
+                return _error(404, "Unknown booking")
+            return httpx.Response(
+                200, json=self.update_booking(int(match[1]), json.loads(request.content))
+            )
         if request.method == "DELETE" and (match := re.fullmatch(r"/reconciliations/(\d+)", route)):
             booking = self.bookings.pop(int(match[1]), None)
             if booking is None:
                 return _error(404, "Unknown booking")
             transaction = self._transaction(booking["transactionInfo"]["id"])
             assert transaction is not None
-            transaction["numberOfReconciliations"] -= 1
-            transaction["isFullyReconciled"] = transaction["numberOfReconciliations"] > 0
+            self._reconcile(transaction)
             return httpx.Response(204)
         return _error(404, "Unknown route")
 

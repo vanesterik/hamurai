@@ -222,3 +222,74 @@ async def test_requests_carry_the_web_app_headers(client, fake, call):
     headers = fake.requests[-1].headers
     assert headers["x-hamurai"] == "HAMURAI"
     assert headers["device-type"] == "DESKTOP"
+
+
+async def test_update_booking_sends_the_recorded_body(client, fake):
+    fake.transactions.append(make_transaction(1, iban=None, name="Card", amount=-9761))
+    booking = await client.create_booking(1, 10, 20)
+
+    updated = await client.update_booking(
+        booking.id,
+        1,
+        amount_cents=-1299,
+        category_id=10,
+        vat_code_id=21,
+        description="ACME SOFTWARE",
+        entry_date=date(2026, 9, 21),
+    )
+
+    assert json.loads(fake.requests[-1].content) == {
+        "amount": -1299,
+        "generalLedgerAccountId": 10,
+        "vatCodeId": 21,
+        "description": "ACME SOFTWARE",
+        "entryDate": "2026-09-21",
+    }
+    assert fake.requests[-1].method == "POST"
+    assert fake.requests[-1].url.path.endswith(f"/reconciliations/{booking.id}")
+    assert (updated.id, updated.amount_cents, updated.vat_code_id) == (booking.id, -1299, 21)
+    assert updated.transaction_id == 1
+
+
+async def test_create_takes_the_remainder(client, fake):
+    fake.transactions.append(make_transaction(1, iban=None, name="Card", amount=-9761))
+    first = await client.create_booking(1, 10, 20)
+    assert first.amount_cents == -9761
+    await client.update_booking(
+        first.id,
+        1,
+        amount_cents=-1299,
+        category_id=10,
+        vat_code_id=20,
+        description="ACME SOFTWARE",
+        entry_date=date(2026, 9, 21),
+    )
+    [transaction] = await client.transactions()
+    assert not transaction.is_fully_reconciled
+
+    second = await client.create_booking(1, 11, 21)
+
+    assert second.amount_cents == -8462
+    [transaction] = await client.transactions()
+    assert transaction.is_fully_reconciled
+    assert transaction.number_of_reconciliations == 2
+
+
+async def test_update_booking_is_never_retried(client, fake):
+    fake.transactions.append(make_transaction(1, iban=None, name="Card", amount=-9761))
+    booking = await client.create_booking(1, 10, 20)
+    fake.fail_updates = [httpx.ReadTimeout("timeout")]
+
+    with pytest.raises(BookingOutcomeUnknown):
+        await client.update_booking(
+            booking.id,
+            1,
+            amount_cents=-1299,
+            category_id=10,
+            vat_code_id=20,
+            description="ACME SOFTWARE",
+            entry_date=date(2026, 9, 21),
+        )
+
+    updates = [r for r in fake.requests if r.url.path.endswith(f"/reconciliations/{booking.id}")]
+    assert len(updates) == 1
