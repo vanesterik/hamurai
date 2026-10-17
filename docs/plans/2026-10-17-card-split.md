@@ -396,3 +396,46 @@ Expected: all pass.
 ## After building: the first real run
 
 On the two Q3 collections still open (−€1.355,42 on 2026-07-20, −€293,50 on 2026-08-17): the user supplies each statement, approves the lines, and checks the split in the Hamurai web app against how they would have split it by hand. The test walkthrough goes in the PR description, not the README.
+
+---
+
+### Task 6: An unmatched credit is a line of its own
+
+Added after the first live run: the July 2026 statement held a credit with no matching purchase, and its collection included it. The user decided it is booked as a positive line.
+
+**Files:**
+- Modify: `src/hamurai/statement.py`, `src/hamurai/server.py`, `tests/test_statement.py`, `tests/test_server_split.py`
+
+**Interfaces:**
+- Changes: `read_statement` keeps a positive row without a purchase of the opposite amount as a `StatementLine` with a positive `amount_cents`, instead of raising. A refund matching purchases from more than one merchant still raises.
+- Changes: `book_split` books purchases first and credits last, each by line number.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_statement.py, replacing test_refund_without_its_purchase_is_refused
+def test_unmatched_credit_is_a_line(tmp_path):
+    # rows: ACME -12,99; ("2026-08-05", "2026-08-06", "SHOP A", "7,50")
+    # → lines [(1, "ACME SOFTWARE", -1299), (2, "SHOP A", 750)], total -549, left_out []
+
+# tests/test_server_split.py
+async def test_book_split_books_a_credit_last(...):
+    # statement: credit "SHOP A" +7,50 first in the file, then ACME -12,99 and CLOUD -84,62;
+    # collection -8911. Booked amounts in order: [-1299, -8462, 750]; status "booked"
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `uv run pytest tests/test_statement.py tests/test_server_split.py -v`
+Expected: FAIL: a `StatementError` for the credit, and the credit booked first.
+
+- [ ] **Step 3: Keep the credit as a line, and order the bookings**
+
+- [ ] **Step 4: Run all checks**
+
+Run: `uv run pytest && uv run ruff check && uv run ruff format --check && uv run ty check`
+Expected: all pass.
+
+- [ ] **Step 5: Commit**
+
+`feat: book a credit without a matching purchase as its own line`.

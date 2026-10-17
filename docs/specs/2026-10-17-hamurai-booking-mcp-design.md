@@ -204,7 +204,8 @@ The columns are `Accountnummer, Kaartnummer, Naam op kaart, Transactiedatum, Boe
 - The account number field starts with `'`.
 - **The card payment row is left out.** The statement opens with the previous collection arriving on the card account, as a positive row described as `BETALING ONTVANGEN - DANK U`. It isn't a purchase: the purchases alone add up to the collection. Rows whose `Omschrijving` starts with `BETALING ONTVANGEN` are left out of the lines and listed as left out.
 - **A refunded purchase is left out, together with its refund.** Sometimes a purchase is followed by a refund for the same amount, and the two cancel out. Neither is booked: there is no use in keeping track of costs that were refunded *(the user's decision)*. A refund is paired with a purchase of exactly the opposite amount, preferring one with the same `Omschrijving`. Both are listed as left out. *(The pairing is the builder's call.)*
-- Any other positive row is refused, with the whole statement: a refund without a matching purchase in the same file (a partial refund, or one for an earlier statement), or one whose candidate purchases come from more than one merchant, none with the refund's own `Omschrijving`. A refund is never booked by a guess.
+- **A credit without a matching purchase is a line of its own**, with a positive amount, matched and booked like a purchase, so it lowers its category's costs *(the user's decision, after the July 2026 statement held a +€74,45 credit from a merchant whose purchase was on an earlier statement, and the collection included it)*. This covers a partial refund and a refund for an earlier statement.
+- A refund whose candidate purchases come from more than one merchant, none with the refund's own `Omschrijving`, is still refused with the whole statement: a refund is never paired by a guess.
 - A file without these columns is refused with a message naming the missing ones, never quoting a row.
 
 **One file is one collection.** All the lines of the file together make up one collection. A statement covers a period by `Boekingsdatum`, and the user exports one statement per file. *(Builder's call.)*
@@ -238,7 +239,7 @@ The two new tools follow the first story's approval rules: one writes nothing, t
    - every line is listed exactly once,
    - every category and VAT code ID is in Hamurai's lists,
    - the collection, fetched again, is still unbooked.
-4. For each line, in file order, it sends two requests, as the web app does:
+4. For each line, purchases first and credits last, each in file order, it sends two requests, as the web app does. With credits last, the last credit's create already gets exactly its own amount as the remainder. *(Builder's call. Whether Hamurai accepts a positive booking on a negative collection, and a split that is over-booked partway, was not recorded; if it refuses, the rollback leaves the collection untouched.)*
    1. **Create**: the existing booking request, with the line's category and VAT code. Hamurai gives the new booking the collection's whole unbooked remainder.
    2. **Update**: the line's amount in cents, the category and VAT code again, the line's `Omschrijving` as the booking's description *(the user's decision, so each booking names its merchant in Hamurai)*, and the collection's date as the entry date, as when splitting by hand.
 5. Once every line is booked, each one is learned under its merchant name, with the line's `Transactiedatum` as the date. Nothing is learned from a split that didn't complete.
@@ -264,7 +265,7 @@ Fixtures are invented: made-up merchants, card and account numbers, never rows f
 
 | Unit | Key cases |
 |---|---|
-| `statement` | Decimal comma to cents, with and without a thousands dot; the leading `'`; blank lines skipped; the payment row left out; a purchase and its refund left out as a pair, preferring the same description; a refund with no matching purchase, or with several merchants to choose from, refused; a missing column refused by name; the card number, account number and name on the card appear in no parsed line. |
+| `statement` | Decimal comma to cents, with and without a thousands dot; the leading `'`; blank lines skipped; the payment row left out; a purchase and its refund left out as a pair, preferring the same description; a credit with no matching purchase kept as a positive line; a refund with several merchants to choose from refused; a missing column refused by name; the card number, account number and name on the card appear in no parsed line. |
 | `client` | The exact update body, with the amount in cents; the update is never retried. |
 | `matcher` | A card line's name match is `confident`; *always ask* and patterns stay `uncertain`. |
 | `server` | No matching collection, or several, is refused before anything is sent; a line listed twice or missing is refused; a failure between a create and its update deletes everything the call created; nothing is learned from an incomplete split; the card number appears in no tool output, including errors. |
