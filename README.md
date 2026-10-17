@@ -23,6 +23,8 @@ The design is in `docs/specs/2026-10-17-hamurai-booking-mcp-design.md`, the impl
 | `seed_suggestions` | nothing | Reads the whole booking history and builds the suggestions in memory. Lists the counterparties booked under more than one category or VAT code. |
 | `save_suggestions(resolutions)` | `data/suggestions.yaml` | Writes the seeded suggestions, with your choice for each flagged counterparty. Refuses if the file already exists. |
 | `book(bookings)` | Hamurai and `data/suggestions.yaml` | Books the given lines and learns each one. The only tool that creates bookings. |
+| `propose_split(statement_path)` | nothing | Reads a credit card statement (CSV), finds the unbooked collection its purchases add up to, and proposes a category and VAT code for each line: `confident` for a known merchant, `uncertain` for an *always ask* merchant or a description match, `unknown` otherwise. Lists the rows left out. |
+| `book_split(transaction_id, lines)` | Hamurai and `data/suggestions.yaml` | Books the proposed collection as one booking per line, all or nothing, and learns each merchant. |
 | `undo_booking(booking_id)` | Hamurai and `data/suggestions.yaml` | Deletes a booking and takes back what it taught. |
 
 Amounts in tool output are in cents: `-1299` is € −12,99.
@@ -41,7 +43,7 @@ No test talks to Hamurai: they run against an in-memory fake with invented data.
 
 ### Connect
 
-Run `/mcp` in Claude Code. `hamurai` should show as connected with seven tools. If it failed to start, run `uv run hamurai` in a terminal: it prints the reason and exits (a missing or empty variable in `.env` is named, never shown). If it starts, it waits for Claude Code; stop it with Ctrl-C.
+Run `/mcp` in Claude Code. `hamurai` should show as connected with nine tools. If it failed to start, run `uv run hamurai` in a terminal: it prints the reason and exits (a missing or empty variable in `.env` is named, never shown). If it starts, it waits for Claude Code; stop it with Ctrl-C.
 
 After changing `.env` or the code, reconnect the server from `/mcp`: it reads `.env` only when it starts.
 
@@ -85,6 +87,25 @@ Claude Code asks your permission for every `book` call. That prompt is your hard
 | `not_tried` | The session expired partway; these lines were not sent. |
 
 Every booking you approve is learned. When you book a counterparty differently than before, the latest choice wins: next quarter proposes the new one, and the evidence says what it was before.
+
+### Split a credit card collection
+
+The card company collects each month's purchases as one bank transaction. Download that month's statement as CSV from the bank that issues the card, drag the file into the Claude Code prompt (it pastes the path), and ask:
+
+> Split the card collection from this statement: ~/Desktop/statement.csv
+
+`propose_split` reads the file itself, so the card number, account number and name on the card never show up in the conversation. It leaves out two kinds of rows and lists them:
+
+- the payment row (`BETALING ONTVANGEN - DANK U`): the previous collection arriving on the card account;
+- a purchase that was refunded for the same amount, together with its refund.
+
+The purchases left must add up to one unbooked bank transaction, within 45 days of the statement's last booking date. If none matches, or more than one does, it refuses and nothing is booked. It also refuses a refund that has no purchase of the same amount in the file.
+
+Claude shows the confident lines as one table and the rest one at a time, as when booking a quarter. For a merchant it hasn't seen, it proposes a category and picks the VAT code by where the merchant is: "Geen / Vrijgesteld" outside the EU, 21% inside it. Every line is booked, so correct a line rather than strike it.
+
+`book_split` books each line onto the collection with the merchant's description and the collection's date. If anything fails partway, it deletes every booking it made, so the collection is either split completely or not at all. If a delete fails too, its report lists the booking IDs left behind. Once the whole split is booked, each merchant is learned, and next month's statement proposes it as `confident`.
+
+To undo a split, undo each of its bookings (the IDs are in `book_split`'s report).
 
 ### Undo a booking
 

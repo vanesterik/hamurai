@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from hamurai.client import HamuraiClient, HamuraiError, SessionExpired
 from hamurai.config import ConfigError, load_config
 from hamurai.matcher import Labels, LineProposal, ProposalSet, propose_all, propose_line
-from hamurai.models import Category, Transaction, VatCode
+from hamurai.models import Booking, Category, Transaction, VatCode
 from hamurai.seeding import DraftEntry, Resolution, UnresolvedError, build_draft, resolve, seedable
 from hamurai.statement import LeftOut, Statement, StatementError, read_statement
 from hamurai.suggestions import SUGGESTIONS_PATH, Entry, SuggestionsFileError, load, save
@@ -88,6 +88,25 @@ class LineResult(BaseModel):
 
 class BookResult(BaseModel):
     lines: list[LineResult]
+    session_expired: bool
+    message: str | None
+
+
+class SplitLine(BaseModel):
+    line: int
+    category_id: int
+    vat_code_id: int
+
+
+class SplitBooking(BaseModel):
+    line: int
+    booking_id: int
+
+
+class SplitResult(BaseModel):
+    status: Literal["booked", "rolled_back", "incomplete"]
+    bookings: list[SplitBooking]
+    left_behind: list[int]
     session_expired: bool
     message: str | None
 
@@ -400,6 +419,113 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
             message=SESSION_EXPIRED if expired else None,
         )
 
+    @mcp.tool()
+    async def book_split(transaction_id: int, lines: list[SplitLine]) -> SplitResult:
+        """Splits the card collection from the latest propose_split, one booking per line.
+
+        Call this only after the user has explicitly approved every line. Takes the
+        collection's transaction ID and every line exactly once. All or nothing: when any
+        request fails, every booking made in this call is deleted again. Learns each
+        merchant once the whole split is booked.
+        """
+        if state.split is None or state.split[0].id != transaction_id:
+            raise ToolError(
+                f"Transaction {transaction_id} is not the split proposed last. "
+                "Run propose_split first."
+            )
+        collection, statement = state.split
+        numbers = [line.line for line in lines]
+        expected = [line.number for line in statement.lines]
+        repeated = sorted({n for n in numbers if numbers.count(n) > 1})
+        missing = sorted(set(expected) - set(numbers))
+        unknown_lines = sorted(set(numbers) - set(expected))
+        if repeated or missing or unknown_lines:
+            problems = [
+                f"{label} line {', '.join(map(str, found))}"
+                for label, found in (
+                    ("repeated", repeated),
+                    ("missing", missing),
+                    ("no", unknown_lines),
+                )
+                if found
+            ]
+            raise ToolError(f"Book every line exactly once: {'; '.join(problems)}.")
+        with tool_errors():
+            labels = await state.labels()
+            unknown = sorted(
+                {b.category_id for b in lines if b.category_id not in labels.categories}
+                | {b.vat_code_id for b in lines if b.vat_code_id not in labels.vat_codes}
+            )
+            if unknown:
+                raise ToolError(f"Unknown category or VAT code IDs: {unknown}")
+            suggestions = load(state.suggestions_path)
+            # Fetched again just before booking, so nothing gets booked twice.
+            latest = {
+                t.id: t
+                for t in await client.transactions(collection.entry_date, collection.entry_date)
+            }
+        current = latest.get(transaction_id)
+        if current is None:
+            raise ToolError(f"Transaction {transaction_id} is no longer in Hamurai.")
+        if current.number_of_reconciliations > 0:
+            raise ToolError(f"Transaction {transaction_id} is already booked; nothing is booked.")
+
+        by_number = {line.number: line for line in statement.lines}
+        chosen = sorted(lines, key=lambda line: line.line)
+        made: list[SplitBooking] = []
+        failure: Exception | None = None
+        # Only a create without an answer can leave a booking nobody knows the ID of.
+        create_unknown = False
+        for choice in chosen:
+            line = by_number[choice.line]
+            try:
+                created = await client.create_booking(
+                    transaction_id, choice.category_id, choice.vat_code_id
+                )
+            except Exception as exc:
+                failure = exc
+                create_unknown = not isinstance(exc, HamuraiError | SessionExpired)
+                break
+            made.append(SplitBooking(line=line.number, booking_id=created.id))
+            try:
+                await client.update_booking(
+                    created.id,
+                    transaction_id,
+                    amount_cents=line.amount_cents,
+                    category_id=choice.category_id,
+                    vat_code_id=choice.vat_code_id,
+                    description=line.description,
+                    entry_date=collection.entry_date,
+                )
+            except Exception as exc:
+                failure = exc
+                break
+
+        if failure is not None:
+            return await _roll_back(client, made, failure, create_unknown)
+
+        state.split = None
+        message = None
+        try:
+            for choice, made_booking in zip(chosen, made, strict=True):
+                line = by_number[choice.line]
+                booking = Booking(
+                    id=made_booking.booking_id,
+                    transaction_id=transaction_id,
+                    category_id=choice.category_id,
+                    vat_code_id=choice.vat_code_id,
+                    amount_cents=line.amount_cents,
+                )
+                suggestions.learn(
+                    iban=None, name=line.description, booking=booking, on=line.transaction_date
+                )
+            save(suggestions, state.suggestions_path)
+        except Exception as exc:
+            message = f"booked, but not learned ({type(exc).__name__})"
+        return SplitResult(
+            status="booked", bookings=made, left_behind=[], session_expired=False, message=message
+        )
+
     @mcp.tool(annotations=ToolAnnotations(destructive_hint=True))
     async def undo_booking(booking_id: int) -> UndoResult:
         """Deletes a booking in Hamurai and takes back what it taught the suggestions.
@@ -425,6 +551,53 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
         return UndoResult(booking_id=booking_id, forgotten=forgotten, already_gone=already_gone)
 
     return mcp
+
+
+async def _roll_back(
+    client: HamuraiClient, made: list[SplitBooking], failure: Exception, create_unknown: bool
+) -> SplitResult:
+    """Delete every booking a stopped split made, newest first, and say what is left."""
+    expired = isinstance(failure, SessionExpired)
+    left_behind = []
+    for made_booking in reversed(made):
+        try:
+            await client.delete_booking(made_booking.booking_id)
+        except SessionExpired:
+            expired = True
+            left_behind.append(made_booking.booking_id)
+        except Exception:
+            left_behind.append(made_booking.booking_id)
+    left_behind.reverse()
+    if isinstance(failure, HamuraiError):
+        reason = f"The split stopped: {failure}."
+    elif isinstance(failure, SessionExpired):
+        reason = "The split stopped."
+    else:
+        reason = "The split stopped: no answer from Hamurai."
+    notes = [reason]
+    if left_behind:
+        notes.append(
+            f"These bookings could not be deleted: {left_behind}. Remove them with "
+            "undo_booking or in the web app."
+        )
+    elif not create_unknown:
+        notes.append("Every booking it made was deleted again; nothing is booked.")
+    if create_unknown:
+        notes.append(
+            "A booking may have been made without an answer: check the collection in "
+            "Hamurai, where propose_bookings lists it as skipped if something was left."
+        )
+    unsure = bool(left_behind) or create_unknown
+    message = " ".join(notes)
+    if expired:
+        message = f"{SESSION_EXPIRED} {message}"
+    return SplitResult(
+        status="incomplete" if unsure else "rolled_back",
+        bookings=[],
+        left_behind=left_behind,
+        session_expired=expired,
+        message=message,
+    )
 
 
 def main() -> None:
