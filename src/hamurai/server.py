@@ -165,6 +165,8 @@ class State:
     draft: list[DraftEntry] | None = None
     split: tuple[Transaction, Statement] | None = None
     receipts: ReceiptProposal | None = None
+    # How far back propose_receipts read the files; link_receipts reads them again as far.
+    receipts_since: date | None = None
     categories: list[Category] | None = None
     vat_codes: list[VatCode] | None = None
 
@@ -312,6 +314,7 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
             splits = await client.bookings_for_many(split_ids)
             files = await client.files(start_date - RECEIPT_LOOKBACK)
         state.receipts = match(targets(transactions, splits), files, (start_date, end_date))
+        state.receipts_since = start_date - RECEIPT_LOOKBACK
         return state.receipts
 
     @mcp.tool()
@@ -360,19 +363,19 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
         crowded = sorted({t for t in asked if asked.count(t) > room.get(t, 0)})
         if crowded:
             raise ToolError(f"More receipts than expenses for transactions {crowded}.")
-        dates = {
-            r.file_id: r.date
-            for r in [p.receipt for p in state.receipts.confident]
-            + [r for group in state.receipts.ambiguous for r in group.receipts]
-        }
+        assert state.receipts_since is not None
         with tool_errors():
-            # Listed again just before linking, so a receipt is never linked twice.
-            current = {
-                f.id: f for f in await client.files(min(dates[i] for i in ids) - timedelta(days=1))
-            }
-        taken = [i for i in ids if i not in current or current[i].is_linked]
+            # Listed again just before linking, as far back as the proposal read, so a receipt
+            # is never linked twice. (A receipt's read date says nothing of its upload date.)
+            current = {f.id: f for f in await client.files(state.receipts_since)}
+        gone = [i for i in ids if i not in current]
+        if gone:
+            raise ToolError(f"Receipts no longer in Hamurai: {gone}. Nothing is linked.")
+        taken = [i for i in ids if current[i].is_linked]
         if taken:
-            raise ToolError(f"Receipts no longer unlinked: {taken}. Nothing is linked.")
+            raise ToolError(
+                f"Receipts linked meanwhile, so no longer unlinked: {taken}. Nothing is linked."
+            )
 
         results: list[LinkResult] = []
         expired = False

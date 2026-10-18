@@ -163,7 +163,7 @@ async def test_link_receipts_refuses_a_receipt_linked_meanwhile(client, fake, pa
         file(fake, 5)["transactionId"] = 99
         result = await session.call_tool("link_receipts", {"links": [link(5, BANK)]})
 
-    assert result.is_error and "no longer unlinked" in text(result)
+    assert result.is_error and "linked meanwhile" in text(result)
     assert not [r for r in fake.requests if r.url.path.endswith("/attach")]
 
 
@@ -245,3 +245,26 @@ async def test_identical_split_lines_take_a_receipt_each(client, fake, path):
 
     assert not result.is_error, text(result)
     assert statuses(result) == [(9, "linked"), (10, "linked")]
+
+
+async def test_link_receipts_finds_a_receipt_uploaded_before_its_read_date(client, fake, path):
+    # Read as dated 2026-07-01 but uploaded on 2026-05-25, behind more than a page of newer
+    # files: the re-check must read as far back as the proposal did.
+    file(fake, 5)["createdAt"] = "2026-05-25T10:00:00"
+    fake.files += [make_file(500 + i, created_at="2026-06-20T10:00:00") for i in range(120)]
+    async with connected(client, path) as session:
+        result = await link_receipts(session, link(5, BANK))
+
+    assert not result.is_error, text(result)
+    assert statuses(result) == [(5, "linked")]
+
+
+async def test_link_receipts_refuses_a_receipt_deleted_meanwhile(client, fake, path):
+    async with connected(client, path) as session:
+        proposed = await propose(session)
+        assert not proposed.is_error
+        fake.files.remove(file(fake, 5))
+        result = await session.call_tool("link_receipts", {"links": [link(5, BANK)]})
+
+    assert result.is_error and "no longer in Hamurai" in text(result)
+    assert not [r for r in fake.requests if r.url.path.endswith("/attach")]
