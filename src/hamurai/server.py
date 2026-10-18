@@ -167,6 +167,7 @@ class State:
     receipts: ReceiptProposal | None = None
     # How far back propose_receipts read the files; link_receipts reads them again as far.
     receipts_since: date | None = None
+    linking: set[int] = field(default_factory=set)
     categories: list[Category] | None = None
     vat_codes: list[VatCode] | None = None
 
@@ -363,6 +364,18 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
         crowded = sorted({t for t in asked if asked.count(t) > room.get(t, 0)})
         if crowded:
             raise ToolError(f"More receipts than expenses for transactions {crowded}.")
+        busy = sorted(i for i in ids if i in state.linking)
+        if busy:
+            raise ToolError(f"Receipts already being linked by another call: {busy}.")
+        # Claimed before the first await, so a parallel call is refused; released however this
+        # one ends.
+        state.linking |= set(ids)
+        try:
+            return await link_all(links, ids)
+        finally:
+            state.linking -= set(ids)
+
+    async def link_all(links: list[ReceiptLink], ids: list[int]) -> LinkReceiptsResult:
         assert state.receipts_since is not None
         with tool_errors():
             # Listed again just before linking, as far back as the proposal read, so a receipt

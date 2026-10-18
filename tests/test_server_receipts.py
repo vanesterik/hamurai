@@ -1,3 +1,4 @@
+import anyio
 import httpx
 import pytest
 from fake_api import make_file, make_transaction
@@ -268,3 +269,35 @@ async def test_link_receipts_refuses_a_receipt_deleted_meanwhile(client, fake, p
 
     assert result.is_error and "no longer in Hamurai" in text(result)
     assert not [r for r in fake.requests if r.url.path.endswith("/attach")]
+
+
+async def test_parallel_link_receipts_link_once(client, fake, path):
+    results = []
+    async with connected(client, path) as session:
+        proposed = await propose(session)
+        assert not proposed.is_error
+        fake.delay = 0.01
+
+        async def call() -> None:
+            results.append(await session.call_tool("link_receipts", {"links": [link(5, BANK)]}))
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(call)
+            group.start_soon(call)
+
+    assert sorted(r.is_error for r in results) == [False, True]
+    assert "already being linked" in text(next(r for r in results if r.is_error))
+    assert len([r for r in fake.requests if r.url.path.endswith("/attach")]) == 1
+
+
+async def test_a_failed_link_releases_its_receipt(client, fake, path):
+    async with connected(client, path) as session:
+        proposed = await propose(session)
+        assert not proposed.is_error
+        fake.fail_routes["/files"] = [500]
+        failed = await session.call_tool("link_receipts", {"links": [link(5, BANK)]})
+        assert failed.is_error
+        again = await session.call_tool("link_receipts", {"links": [link(5, BANK)]})
+
+    assert not again.is_error, text(again)
+    assert statuses(again) == [(5, "linked")]
