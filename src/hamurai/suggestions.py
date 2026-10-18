@@ -71,6 +71,10 @@ class Entry(BaseModel):
     def last_seen(self) -> date:
         return max(learned.date for learned in self.bookings)
 
+    def sort_bookings(self) -> None:
+        """Order the bookings by date, so the latest is the current choice."""
+        self.bookings.sort(key=lambda learned: learned.date)
+
     @property
     def counts(self) -> dict[Pair, int]:
         counts: dict[Pair, int] = {}
@@ -90,6 +94,13 @@ class Pattern(BaseModel):
 class Suggestions(BaseModel):
     entries: list[Entry] = []
     patterns: list[Pattern] = []
+    # Payment providers collect for many merchants under one IBAN: kept by hand, and their
+    # transactions are matched and learned by the merchant's name, never by the IBAN.
+    provider_ibans: list[str] = []
+
+    def is_provider(self, iban: str | None) -> bool:
+        key = normalize_iban(iban)
+        return key is not None and key in {normalize_iban(p) for p in self.provider_ibans}
 
     def by_iban(self, iban: str | None) -> Entry | None:
         key = normalize_iban(iban)
@@ -101,7 +112,15 @@ class Suggestions(BaseModel):
         key = normalize_name(name)
         if key is None:
             return None
-        return next((e for e in self.entries if normalize_name(e.name) == key), None)
+        # An entry under a provider's own IBAN mixes merchants: it never answers for one.
+        return next(
+            (
+                e
+                for e in self.entries
+                if normalize_name(e.name) == key and not self.is_provider(e.iban)
+            ),
+            None,
+        )
 
     def record(self, transaction: Transaction, booking: Booking) -> bool:
         """Learn a booking. False when the transaction has neither an IBAN nor a name."""
@@ -114,8 +133,8 @@ class Suggestions(BaseModel):
 
     def learn(self, *, iban: str | None, name: str | None, booking: Booking, on: date) -> bool:
         """Learn a booking by IBAN and name, such as a card line's merchant. False without
-        either."""
-        iban = normalize_iban(iban)
+        either. A provider's IBAN counts as none: the booking is learned by the merchant's name."""
+        iban = None if self.is_provider(iban) else normalize_iban(iban)
         if iban is None and normalize_name(name) is None:
             return False
         entry = self.by_iban(iban)
@@ -179,6 +198,8 @@ def save(suggestions: Suggestions, path: Path = SUGGESTIONS_PATH) -> None:
     for entry in data["entries"]:
         if not entry["always_ask"]:
             del entry["always_ask"]
+    if not data["provider_ibans"]:
+        del data["provider_ibans"]
     text = yaml.safe_dump(data, sort_keys=False, default_flow_style=None, allow_unicode=True)
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(

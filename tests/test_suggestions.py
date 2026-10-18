@@ -5,6 +5,8 @@ import yaml
 
 from hamurai.models import Booking, Transaction
 from hamurai.suggestions import (
+    Entry,
+    LearnedBooking,
     Pair,
     Suggestions,
     SuggestionsFileError,
@@ -224,3 +226,79 @@ def test_learn_by_name_only():
 
 def test_learn_without_iban_or_name_is_refused():
     assert not Suggestions().learn(iban=None, name=" ", booking=booking(7), on=date(2026, 8, 30))
+
+
+PROVIDER = "NL00PROV0000000001"
+
+
+def on_provider(id: int, name: str | None, day: int = 1):
+    return tx(id, iban=PROVIDER, name=name, day=day)
+
+
+def test_provider_ibans_are_normalised():
+    suggestions = Suggestions(provider_ibans=["nl00 prov 0000 0000 01"])
+
+    assert suggestions.is_provider(PROVIDER)
+    assert not suggestions.is_provider(IBAN)
+    assert not suggestions.is_provider(None)
+
+
+def test_provider_ibans_survive_a_save(tmp_path):
+    path = tmp_path / "suggestions.yaml"
+    save(Suggestions(provider_ibans=[PROVIDER]), path)
+
+    assert load(path).provider_ibans == [PROVIDER]
+
+
+def test_no_provider_ibans_are_not_written(tmp_path):
+    path = tmp_path / "suggestions.yaml"
+    save(Suggestions(), path)
+
+    assert "provider_ibans" not in path.read_text()
+
+
+def test_two_merchants_on_a_provider_iban_are_two_entries():
+    suggestions = Suggestions(provider_ibans=[PROVIDER])
+
+    suggestions.record(on_provider(1, "Shop A"), booking(101, 1, 10))
+    suggestions.record(on_provider(2, "Shop B", day=2), booking(102, 2, 11))
+
+    assert [(e.iban, e.name, e.current.category_id) for e in suggestions.entries] == [
+        (None, "Shop A", 10),
+        (None, "Shop B", 11),
+    ]
+
+
+def test_provider_transaction_without_name_is_not_learned():
+    suggestions = Suggestions(provider_ibans=[PROVIDER])
+
+    assert not suggestions.record(on_provider(1, None), booking(101))
+    assert suggestions.entries == []
+
+
+def test_old_provider_entry_never_answers_a_name_lookup():
+    old = Entry(
+        iban=PROVIDER,
+        name="Shop A",
+        bookings=[LearnedBooking(id=1, category_id=11, vat_code_id=20, date=date(2026, 1, 1))],
+    )
+    suggestions = Suggestions(entries=[old], provider_ibans=[PROVIDER])
+
+    assert suggestions.by_name("Shop A") is None
+    suggestions.record(on_provider(2, "Shop A"), booking(102, 2, 10))
+    assert [(e.iban, len(e.bookings)) for e in suggestions.entries] == [(PROVIDER, 1), (None, 1)]
+
+
+def test_sort_bookings_makes_the_latest_current():
+    entry = Entry(
+        name="Shop A",
+        bookings=[
+            LearnedBooking(id=2, category_id=10, vat_code_id=20, date=date(2026, 5, 1)),
+            LearnedBooking(id=1, category_id=11, vat_code_id=20, date=date(2025, 5, 1)),
+        ],
+    )
+
+    entry.sort_bookings()
+
+    assert [b.id for b in entry.bookings] == [1, 2]
+    assert entry.current.category_id == 10
