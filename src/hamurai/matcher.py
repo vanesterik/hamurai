@@ -6,7 +6,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
-from hamurai.models import Transaction
+from hamurai.models import CounterAccount, Transaction
 from hamurai.statement import StatementLine
 from hamurai.suggestions import Entry, Pair, Suggestions
 
@@ -68,13 +68,9 @@ class ProposalSet(BaseModel):
 
 def propose(transaction: Transaction, suggestions: Suggestions, labels: Labels) -> Proposal:
     """IBAN match → confident; name or description pattern → uncertain; else unknown."""
-    account = transaction.counter_account
-    if (entry := suggestions.by_iban(account.number)) is not None:
-        choice = _from_entry(entry, Confidence.CONFIDENT, "IBAN match", labels)
-    elif (entry := suggestions.by_name(account.name_account_holder)) is not None:
-        choice = _from_entry(entry, Confidence.UNCERTAIN, "Name match", labels)
-    else:
-        choice = _from_pattern(transaction.description, suggestions)
+    choice = _match_counterparty(
+        transaction.counter_account, transaction.description, suggestions, labels
+    )
     return Proposal(
         transaction=transaction,
         confidence=choice.confidence,
@@ -86,10 +82,7 @@ def propose(transaction: Transaction, suggestions: Suggestions, labels: Labels) 
 
 def propose_line(line: StatementLine, suggestions: Suggestions, labels: Labels) -> LineProposal:
     """Merchant name match → confident (a card line has no IBAN); pattern → uncertain."""
-    if (entry := suggestions.by_name(line.description)) is not None:
-        choice = _from_entry(entry, Confidence.CONFIDENT, "Merchant match", labels)
-    else:
-        choice = _from_pattern(line.description, suggestions)
+    choice = _match_merchant(line.description, suggestions, labels)
     return LineProposal(
         line=line,
         confidence=choice.confidence,
@@ -113,6 +106,24 @@ def propose_all(
         proposal = propose(transaction, suggestions, labels)
         getattr(result, proposal.confidence.value).append(proposal)
     return result
+
+
+def _match_counterparty(
+    account: CounterAccount, description: str, suggestions: Suggestions, labels: Labels
+) -> _Choice:
+    """A bank transaction's match: by IBAN, then by name, then by a description pattern."""
+    if (entry := suggestions.by_iban(account.number)) is not None:
+        return _from_entry(entry, Confidence.CONFIDENT, "IBAN match", labels)
+    if (entry := suggestions.by_name(account.name_account_holder)) is not None:
+        return _from_entry(entry, Confidence.UNCERTAIN, "Name match", labels)
+    return _from_pattern(description, suggestions)
+
+
+def _match_merchant(description: str, suggestions: Suggestions, labels: Labels) -> _Choice:
+    """A card line's match: by the merchant's name, then by a description pattern."""
+    if (entry := suggestions.by_name(description)) is not None:
+        return _from_entry(entry, Confidence.CONFIDENT, "Merchant match", labels)
+    return _from_pattern(description, suggestions)
 
 
 def _from_pattern(description: str, suggestions: Suggestions) -> _Choice:
