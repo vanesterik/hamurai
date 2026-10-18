@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from hamurai.client import BookingOutcomeUnknown, HamuraiClient, HamuraiError, SessionExpired
 from hamurai.config import ConfigError, load_config
+from hamurai.listing import GroupBy, SuggestionListing, list_suggestions
 from hamurai.matcher import Labels, LineProposal, ProposalSet, propose_all, propose_line
 from hamurai.models import Booking, Category, Transaction, VatCode
 from hamurai.receipts import ReceiptProposal, match, targets
@@ -225,6 +226,22 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
         with tool_errors():
             state.vat_codes = await client.vat_codes()
             return state.vat_codes
+
+    @mcp.tool(annotations=READ_ONLY, name="list_suggestions")
+    async def list_suggestions_tool(
+        group_by: GroupBy = "category", text: str | None = None, category_id: int | None = None
+    ) -> SuggestionListing:
+        """List what has been learned: every counterparty once, under the pair it is proposed with.
+
+        group_by picks the perspective: "category" (category and VAT code), "vat" (VAT code
+        alone) or "match" (always ask, by IBAN, by name). text narrows it to names or IBANs
+        containing it, category_id to one category. Patterns and provider IBANs come apart.
+        Never writes anything. Show it as a table per group.
+        """
+        with tool_errors():
+            suggestions = load(state.suggestions_path)
+            labels = await state.labels()
+        return list_suggestions(suggestions, labels, group_by, text, category_id)
 
     @mcp.tool(annotations=READ_ONLY)
     async def propose_bookings(start_date: date, end_date: date) -> ProposeResult:

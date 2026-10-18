@@ -19,6 +19,7 @@ The design is in `docs/specs/2026-10-17-hamurai-booking-mcp-design.md`, the impl
 | Tool | Writes to | What it does |
 |---|---|---|
 | `list_categories`, `list_vat_codes` | nothing | Hamurai's categories (ID, code, name) and VAT codes (ID, description). |
+| `list_suggestions(group_by, text, category_id)` | nothing | Lists what has been learned: every counterparty once, under the pair it is proposed with, grouped by `category` (category and VAT code), `vat` or `match` (always ask, by IBAN, by name). Patterns and provider IBANs come apart. |
 | `propose_bookings(start_date, end_date)` | nothing | Proposes a category and VAT code for each unbooked transaction in the period, in four groups: `confident` (IBAN match), `uncertain` (name or description match), `unknown` (no match) and `skipped` (partly booked, never touched). Each proposal says why. |
 | `seed_suggestions` | nothing | Reads the whole booking history and builds the suggestions in memory. Lists the counterparties booked under more than one category or VAT code. |
 | `save_suggestions(resolutions)` | `data/suggestions.yaml` | Writes the seeded suggestions, with your choice for each flagged counterparty. Refuses if the file already exists. |
@@ -49,7 +50,7 @@ No test talks to Hamurai: they run against an in-memory fake with invented data,
 
 ### Connect
 
-Run `/mcp` in Claude Code. `hamurai` should show as connected with twelve tools. If it failed to start, run `uv run hamurai` in a terminal: it prints the reason and exits (a missing or empty variable in `.env` is named, never shown). If it starts, it waits for Claude Code; stop it with Ctrl-C.
+Run `/mcp` in Claude Code. `hamurai` should show as connected with thirteen tools. If it failed to start, run `uv run hamurai` in a terminal: it prints the reason and exits (a missing or empty variable in `.env` is named, never shown). If it starts, it waits for Claude Code; stop it with Ctrl-C.
 
 After changing `.env` or the code, reconnect the server from `/mcp`: it reads `.env` only when it starts.
 
@@ -136,6 +137,20 @@ Only a pair nothing else could fit is `confident`: Claude shows those as one tab
 > Undo the booking for the parking garage.
 
 `undo_booking` takes a booking ID (from `book`'s report), deletes that booking in Hamurai and takes back what it taught. If the booking was already deleted in the web app, it still takes it back. It deletes whatever booking ID it gets, including ones made by hand in the web app, so check the ID in the permission prompt.
+
+### Look through the suggestions
+
+> Show me the suggestions by VAT code.
+>
+> What do you know about Spotify?
+
+`list_suggestions` lists every learned counterparty once, under the category and VAT code it would be proposed with, with its number of bookings, when it was last seen, and whether it is *always ask*. A counterparty booked more than one way also shows its other pairs. Three perspectives:
+
+- `category` (the default): by category and VAT code;
+- `vat`: by VAT code alone, to check rates across categories;
+- `match`: by how a counterparty is matched: *always ask*, *by IBAN* (proposed as confident), or *by name* (card merchants, payment-provider merchants, counterparties without an IBAN).
+
+A text narrows it to names or IBANs containing it, a category to that category. The patterns and provider IBANs are listed apart. It writes nothing: to change a suggestion, book the next payment differently, or edit `data/suggestions.yaml`.
 
 ### Add a description pattern
 

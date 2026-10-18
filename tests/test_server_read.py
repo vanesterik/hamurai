@@ -294,3 +294,22 @@ async def test_save_suggestions_with_always_ask(client, fake, path):
     assert not saved.is_error, text(saved)
     [proposal] = result.structured_content["proposals"]["uncertain"]
     assert "always ask" in proposal["evidence"]
+
+
+async def test_list_suggestions_groups_what_was_learned(client, fake, path):
+    async with connected(client, path) as session:
+        booked_history(fake)
+        await seed_and_save(session)
+        by_category = await session.call_tool("list_suggestions", {})
+        by_match = await session.call_tool(
+            "list_suggestions", {"group_by": "match", "text": "acme"}
+        )
+        refused = await session.call_tool("list_suggestions", {"group_by": "colour"})
+
+    assert not by_category.is_error, text(by_category)
+    data = by_category.structured_content
+    assert data["entries"] == 2
+    assert [g["title"] for g in data["groups"]] == ["4500 Kantoorkosten / 21% hoog"]
+    assert [e["name"] for e in by_match.structured_content["groups"][0]["entries"]] == ["Acme"]
+    assert refused.is_error
+    assert [r for r in fake.requests if r.method != "GET"] == []
