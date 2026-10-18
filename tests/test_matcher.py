@@ -206,3 +206,48 @@ def test_line_without_a_match_is_unknown():
     proposal = propose_line(card_line("SOMEWHERE ELSE"), CARD_SUGGESTIONS, LABELS)
     assert proposal.confidence is Confidence.UNKNOWN
     assert (proposal.category_id, proposal.vat_code_id) == (None, None)
+
+
+PROVIDER = "NL00PROV0000000001"
+OLD_PROVIDER_ENTRY = entry(PROVIDER, "Shop A", (3, 11, "2026-01-01"))
+SHOP_A = entry(None, "Shop A", (2, 10, "2026-02-01"))
+PROVIDER_SUGGESTIONS = Suggestions(
+    entries=[OLD_PROVIDER_ENTRY, SHOP_A, ASK],
+    patterns=[Pattern(contains="Bankkosten", category_id=11, vat_code_id=20)],
+    provider_ibans=[PROVIDER],
+)
+
+
+def test_provider_transaction_matches_its_merchant():
+    proposal = propose(unbooked(iban=PROVIDER, name="Shop A"), PROVIDER_SUGGESTIONS, LABELS)
+
+    assert proposal.confidence is Confidence.UNCERTAIN
+    assert (proposal.category_id, proposal.vat_code_id) == (10, 20)
+    assert proposal.evidence.startswith("Merchant match via payment provider")
+
+
+def test_provider_transaction_of_an_unknown_merchant_falls_to_patterns():
+    transaction = unbooked(iban=PROVIDER, name="Shop Z").model_copy(
+        update={"description": "Bankkosten"}
+    )
+
+    proposal = propose(transaction, PROVIDER_SUGGESTIONS, LABELS)
+
+    assert proposal.confidence is Confidence.UNCERTAIN
+    assert proposal.evidence.startswith("Description contains")
+
+
+def test_provider_merchant_marked_always_ask_stays_uncertain():
+    proposal = propose(unbooked(iban=PROVIDER, name="Marketplace"), PROVIDER_SUGGESTIONS, LABELS)
+
+    assert proposal.confidence is Confidence.UNCERTAIN
+    assert "always ask" in proposal.evidence
+
+
+def test_iban_not_on_the_list_is_unchanged():
+    suggestions = PROVIDER_SUGGESTIONS.model_copy(update={"provider_ibans": []})
+
+    proposal = propose(unbooked(iban=PROVIDER, name="Shop A"), suggestions, LABELS)
+
+    assert proposal.confidence is Confidence.CONFIDENT
+    assert proposal.category_id == 11

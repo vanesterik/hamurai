@@ -111,7 +111,14 @@ def propose_all(
 def _match_counterparty(
     account: CounterAccount, description: str, suggestions: Suggestions, labels: Labels
 ) -> _Choice:
-    """A bank transaction's match: by IBAN, then by name, then by a description pattern."""
+    """A bank transaction's match: by IBAN, then by name, then by a description pattern. On a
+    payment provider's IBAN, by the merchant's name only: the IBAN is shared by many."""
+    if suggestions.is_provider(account.number):
+        if (entry := suggestions.by_name(account.name_account_holder)) is not None:
+            return _from_entry(
+                entry, Confidence.UNCERTAIN, "Merchant match via payment provider", labels
+            )
+        return _from_pattern(description, suggestions)
     if (entry := suggestions.by_iban(account.number)) is not None:
         return _from_entry(entry, Confidence.CONFIDENT, "IBAN match", labels)
     if (entry := suggestions.by_name(account.name_account_holder)) is not None:
