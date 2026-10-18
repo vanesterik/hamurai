@@ -251,3 +251,13 @@ def test_iban_not_on_the_list_is_unchanged():
 
     assert proposal.confidence is Confidence.CONFIDENT
     assert proposal.category_id == 11
+
+
+def test_always_ask_evidence_names_the_latest_dated_booking():
+    mixed = entry(IBAN, "Own account", (1, 10, "2026-10-16"), (1, 11, "2026-10-02"))
+    mixed.always_ask = True
+
+    proposal = propose(unbooked(), Suggestions(entries=[mixed]), LABELS)
+
+    assert proposal.category_id == 10
+    assert "on 2026-10-16" in proposal.evidence

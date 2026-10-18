@@ -309,3 +309,32 @@ def test_provider_ibans_are_normalised_when_read(tmp_path):
     path.write_text("provider_ibans:\n- nl00 prov 0000 0000 01\n- NL00PROV0000000001\n")
 
     assert load(path).provider_ibans == [PROVIDER]
+
+
+def test_current_is_the_latest_dated_booking_not_the_last_learned():
+    entry = Entry(
+        name="Own account",
+        bookings=[
+            LearnedBooking(id=1, category_id=10, vat_code_id=20, date=date(2026, 9, 1)),
+            LearnedBooking(id=2, category_id=10, vat_code_id=20, date=date(2026, 10, 16)),
+            # Learned last, but dated earlier.
+            LearnedBooking(id=3, category_id=11, vat_code_id=20, date=date(2026, 10, 2)),
+        ],
+    )
+
+    assert entry.current.category_id == 10
+    assert entry.latest.id == 2
+    assert entry.since == date(2026, 10, 16)
+
+
+def test_on_the_same_date_the_booking_learned_last_wins():
+    entry = Entry(
+        name="Shop",
+        bookings=[
+            LearnedBooking(id=1, category_id=10, vat_code_id=20, date=date(2026, 10, 2)),
+            LearnedBooking(id=2, category_id=11, vat_code_id=20, date=date(2026, 10, 2)),
+        ],
+    )
+
+    assert entry.current.category_id == 11
+    assert entry.since == date(2026, 10, 2)

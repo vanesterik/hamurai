@@ -159,7 +159,7 @@ def _from_entry(entry: Entry, confidence: Confidence, match: str, labels: Labels
             current.category_id,
             current.vat_code_id,
             f"{match}, always ask; last booked as {labels.pair(current)} "
-            f"on {entry.bookings[-1].date}; history {history}",
+            f"on {entry.latest.date}; history {history}",
         )
     older = sorted(
         ((count, pair) for pair, count in counts.items() if pair != current),

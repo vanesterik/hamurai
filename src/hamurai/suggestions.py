@@ -1,7 +1,7 @@
 """The learned bookings in `data/suggestions.yaml`: the only unit that touches that file.
 
 Each entry is one counterparty with every booking learned for it, in the order they were
-learned. The latest booking's category and VAT code is the entry's current choice.
+learned. The latest-dated booking's category and VAT code is the entry's current choice.
 """
 
 import os
@@ -54,15 +54,26 @@ class Entry(BaseModel):
     bookings: list[LearnedBooking]
 
     @property
+    def by_date(self) -> list[LearnedBooking]:
+        """The bookings by date. Stable: on one date, the booking learned last comes last."""
+        return sorted(self.bookings, key=lambda learned: learned.date)
+
+    @property
+    def latest(self) -> LearnedBooking:
+        """The latest-dated booking, whatever order it was learned in."""
+        return self.by_date[-1]
+
+    @property
     def current(self) -> Pair:
-        return self.bookings[-1].pair
+        return self.latest.pair
 
     @property
     def since(self) -> date:
         """The date of the first booking in the trailing run of the current pair."""
-        since = self.bookings[-1].date
-        for learned in reversed(self.bookings):
-            if learned.pair != self.current:
+        current = self.current
+        since = self.latest.date
+        for learned in reversed(self.by_date):
+            if learned.pair != current:
                 break
             since = learned.date
         return since
