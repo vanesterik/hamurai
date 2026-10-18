@@ -311,7 +311,7 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
             split_ids = [t.id for t in transactions if t.number_of_reconciliations > 1]
             splits = await client.bookings_for_many(split_ids)
             files = await client.files(start_date - RECEIPT_LOOKBACK)
-        state.receipts = match(targets(transactions, splits), files)
+        state.receipts = match(targets(transactions, splits), files, (start_date, end_date))
         return state.receipts
 
     @mcp.tool()

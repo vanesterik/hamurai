@@ -166,3 +166,49 @@ def test_counterparty_falls_back_to_the_description():
     [target] = targets([tx(1, name=None, description="Kosten pakket")], {})
 
     assert (target.counterparty, target.split_line) == ("Kosten pakket", False)
+
+
+PERIOD = (date(2026, 7, 1), date(2026, 9, 30))
+
+
+def unlinked(id: int, created: str, amount: int | None = None, on: str | None = None) -> File:
+    return File.model_validate(
+        make_file(id, created_at=f"{created}T10:00:00", amount_cents=amount, receipt_date=on)
+    )
+
+
+def test_unmatched_counts_only_receipts_that_could_belong_to_the_period():
+    files = [
+        unlinked(1, "2026-05-20", 4200, "2026-05-17"),  # 45 days before the start: counted
+        unlinked(2, "2026-05-20", 4200, "2026-05-16"),  # 46 days before: not
+        unlinked(3, "2026-10-03", 4200, "2026-10-03"),  # 3 days after the end: counted
+        unlinked(4, "2026-10-10", 4200, "2026-10-04"),  # 4 days after: not
+        unlinked(5, "2026-08-01", 4200, "2026-08-01"),  # inside: counted
+    ]
+
+    result = match([], files, PERIOD)
+
+    assert sorted(r.file_id for r in result.unmatched) == [1, 3, 5]
+
+
+def test_without_amount_counts_only_files_uploaded_around_the_period():
+    files = [
+        unlinked(1, "2026-05-17"),  # 45 days before the start: counted
+        unlinked(2, "2026-05-16"),  # 46 days before: not
+        unlinked(3, "2026-11-14"),  # 45 days after the end: counted
+        unlinked(4, "2026-11-15"),  # 46 days after: not
+        unlinked(5, "2026-08-01"),  # inside: counted
+    ]
+
+    assert match([], files, PERIOD).without_amount == 3
+
+
+def test_a_receipt_outside_the_period_still_matches_inside_its_window():
+    # A bank transaction on the period's first day accepts a receipt 30 days before it.
+    result = match(
+        targets([tx(1, on=date(2026, 7, 1))], {}),
+        [unlinked(5, "2026-06-05", 875, "2026-06-01")],
+        PERIOD,
+    )
+
+    assert [p.receipt.file_id for p in result.confident] == [5]

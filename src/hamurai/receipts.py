@@ -15,6 +15,8 @@ from hamurai.models import Booking, File, Transaction
 BANK_WINDOW = (timedelta(days=30), timedelta(days=3))
 # A split line carries the collection's date, which comes up to ~45 days after the purchase.
 SPLIT_WINDOW = timedelta(days=45)
+# How long after the period a receipt without a date may have been uploaded and still count.
+UPLOAD_DELAY = timedelta(days=45)
 
 # A group of targets: the transaction, the amount for split lines, and an index otherwise.
 type GroupKey = tuple[int, int | None, int]
@@ -91,15 +93,22 @@ def targets(
     return result
 
 
-def match(targets: Sequence[Target], files: Sequence[File]) -> ReceiptProposal:
-    """Pair the unlinked receipts with the targets they fit."""
+def match(
+    targets: Sequence[Target], files: Sequence[File], period: tuple[date, date] | None = None
+) -> ReceiptProposal:
+    """Pair the unlinked receipts with the targets they fit. With a period, the receipts left
+    over are counted only when they could belong to it."""
     proposal = ReceiptProposal()
     receipts = []
     for file in files:
         if file.is_linked:
             continue
         if file.amount_cents is None or file.receipt_date is None:
-            proposal.without_amount += 1
+            # No date to go by: the upload date, as a receipt is uploaded after its own.
+            if period is None or (
+                period[0] - SPLIT_WINDOW <= file.created_at.date() <= period[1] + UPLOAD_DELAY
+            ):
+                proposal.without_amount += 1
             continue
         receipts.append(
             Receipt(
@@ -141,7 +150,12 @@ def match(targets: Sequence[Target], files: Sequence[File]) -> ReceiptProposal:
     components: dict[Hashable, tuple[list[Receipt], list[GroupKey]]] = {}
     for receipt in receipts:
         if not edges[receipt.file_id]:
-            proposal.unmatched.append(receipt)
+            # The outer edges of the two windows: dated any earlier or later, it can't be one of
+            # the period's.
+            if period is None or (
+                period[0] - SPLIT_WINDOW <= receipt.date <= period[1] + BANK_WINDOW[1]
+            ):
+                proposal.unmatched.append(receipt)
             continue
         found = components.setdefault(find(("receipt", receipt.file_id)), ([], []))
         found[0].append(receipt)
