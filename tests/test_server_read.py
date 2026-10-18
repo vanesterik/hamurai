@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -7,7 +8,7 @@ from conftest import COOKIE
 from fake_api import make_transaction
 from mcp import Client
 
-from hamurai.server import SESSION_EXPIRED, build_server
+from hamurai.server import SESSION_EXPIRED, build_server, quiet_logs
 
 pytestmark = pytest.mark.anyio
 
@@ -317,3 +318,29 @@ async def test_list_suggestions_groups_what_was_learned(client, fake, path):
     assert [g["more"] for g in limited.structured_content["groups"]] == [1]
     assert refused.is_error
     assert [r for r in fake.requests if r.method != "GET"] == []
+
+
+@pytest.fixture
+def restored_log_levels():
+    loggers = [logging.getLogger(name) for name in ("httpx", "mcp.server.mcpserver.server")]
+    levels = [logger.level for logger in loggers]
+    yield
+    for logger, level in zip(loggers, levels, strict=True):
+        logger.setLevel(level)
+
+
+@pytest.mark.usefixtures("restored_log_levels")
+async def test_tool_errors_are_not_logged(client, path, caplog):
+    caplog.set_level(logging.INFO)
+    async with connected(client, path) as session:
+        await session.call_tool("save_suggestions", {"resolutions": []})
+        logged = [r.getMessage() for r in caplog.records]
+        caplog.clear()
+        quiet_logs()
+        result = await session.call_tool("save_suggestions", {"resolutions": []})
+
+    assert any("Nothing to save" in message for message in logged)
+    assert result.is_error
+    assert "Nothing to save" in text(result)
+    assert not [r for r in caplog.records if "Nothing to save" in r.getMessage()]
+    assert logging.getLogger("httpx").level == logging.WARNING

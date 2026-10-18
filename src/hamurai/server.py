@@ -961,6 +961,14 @@ async def _roll_back(
     )
 
 
+def quiet_logs() -> None:
+    """Keep bookkeeping data out of the server's stderr log."""
+    # httpx logs every request URL at INFO; Hamurai's URLs carry the administration ID.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    # The SDK logs each tool error's text at INFO: IDs, amounts and IBANs. Claude gets it anyway.
+    logging.getLogger("mcp.server.mcpserver.server").setLevel(logging.WARNING)
+
+
 def main() -> None:
     try:
         config = load_config()
@@ -968,6 +976,5 @@ def main() -> None:
     except (ConfigError, SuggestionsFileError) as exc:
         print(f"hamurai: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
-    # httpx logs every request URL at INFO; Hamurai's URLs carry the administration ID.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    quiet_logs()
     build_server(HamuraiClient(config)).run()
