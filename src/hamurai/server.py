@@ -79,11 +79,14 @@ class MerchantSummary(BaseModel):
     category_id: int
     vat_code_id: int
     label: str
+    # Booked in more than one way: the counterparty name may not name one merchant.
+    mixed: bool
 
 
 class RelearnSummary(BaseModel):
     merchants: list[MerchantSummary]
     bookings: int
+    kept_bookings: int
     removed_entries: int
 
 
@@ -498,7 +501,8 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
         Reads the booking history of every IBAN in provider_ibans (one request per booked
         transaction), removes the entries under those IBANs, which mix merchants, and learns
         each booking again under its merchant's name; the latest choice wins. Writes only the
-        suggestions file, never Hamurai, and gives the same result when run again.
+        suggestions file, never Hamurai, and gives the same result when run again. Point out
+        merchants marked mixed: their name may not name one merchant (mark them always_ask).
         """
         with tool_errors():
             suggestions = load(state.suggestions_path)
@@ -518,21 +522,35 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
         history = sorted(
             ((t, b) for t in on_provider for b in bookings[t.id]), key=lambda row: row[0].entry_date
         )
+        relearned = {booking.id for _, booking in history}
         removed = [e for e in suggestions.entries if suggestions.is_provider(e.iban)]
-        suggestions.entries = [e for e in suggestions.entries if e not in removed]
+        # Bookings in those entries that aren't in the history (a card line once learned into
+        # one by its name) stay with that name rather than being lost.
+        kept = [(e.name, b) for e in removed for b in e.bookings if b.id not in relearned]
+        suggestions.entries = [
+            e for e in suggestions.entries if not suggestions.is_provider(e.iban)
+        ]
         # Taken back wherever they were learned before, so a second run counts nothing twice.
-        for _, booking in history:
-            suggestions.forget(booking.id)
-        names = []
+        # Emptied entries stay until the end, so relearning finds them with their marks.
+        for entry in suggestions.entries:
+            entry.bookings = [b for b in entry.bookings if b.id not in relearned]
+        touched: dict[int, Entry] = {}
+        learned = 0
         for transaction, booking in history:
             if suggestions.record(transaction, booking):
-                names.append(transaction.counter_account.name_account_holder)
-        merchants = {}
-        for name in names:
+                learned += 1
+                entry = suggestions.by_name(transaction.counter_account.name_account_holder)
+                if entry is not None:
+                    touched[id(entry)] = entry
+        for name, booking in kept:
             entry = suggestions.by_name(name)
-            if entry is not None:
-                merchants[id(entry)] = entry
-        for entry in merchants.values():
+            if entry is None:
+                entry = Entry(name=name, bookings=[])
+                suggestions.entries.append(entry)
+            entry.bookings.append(booking)
+            touched[id(entry)] = entry
+        suggestions.entries = [e for e in suggestions.entries if e.bookings]
+        for entry in touched.values():
             entry.sort_bookings()
         save(suggestions, state.suggestions_path)
         return RelearnSummary(
@@ -543,10 +561,12 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
                     category_id=entry.current.category_id,
                     vat_code_id=entry.current.vat_code_id,
                     label=labels.pair(entry.current),
+                    mixed=len(entry.counts) > 1,
                 )
-                for entry in merchants.values()
+                for entry in touched.values()
             ],
-            bookings=len(history),
+            bookings=learned,
+            kept_bookings=len(kept),
             removed_entries=len(removed),
         )
 

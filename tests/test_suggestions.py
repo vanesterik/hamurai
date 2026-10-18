@@ -302,3 +302,10 @@ def test_sort_bookings_makes_the_latest_current():
 
     assert [b.id for b in entry.bookings] == [1, 2]
     assert entry.current.category_id == 10
+
+
+def test_provider_ibans_are_normalised_when_read(tmp_path):
+    path = tmp_path / "suggestions.yaml"
+    path.write_text("provider_ibans:\n- nl00 prov 0000 0000 01\n- NL00PROV0000000001\n")
+
+    assert load(path).provider_ibans == [PROVIDER]

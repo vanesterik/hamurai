@@ -169,3 +169,43 @@ async def test_undo_after_relearn(client, fake, path):
 
     assert not result.is_error, text(result)
     assert load(path).by_name("Shop B") is None
+
+
+async def test_relearn_keeps_always_ask_set_between_runs(client, fake, path):
+    await relearn(client, path)
+    suggestions = load(path)
+    shop_a = suggestions.by_name("Shop A")
+    assert shop_a is not None
+    shop_a.always_ask = True
+    save(suggestions, path)
+
+    await relearn(client, path)
+
+    shop_a = load(path).by_name("Shop A")
+    assert shop_a is not None and shop_a.always_ask
+
+
+async def test_relearn_keeps_bookings_it_cannot_relearn(client, fake, path):
+    # A card line once learned into the old provider entry by its name: not in the history.
+    suggestions = load(path)
+    old = suggestions.entries[0]
+    old.bookings.append(learned(8888, 11, "2025-07-01"))
+    save(suggestions, path)
+
+    result = await relearn(client, path)
+
+    assert result.structured_content["kept_bookings"] == 1
+    shop_a = load(path).by_name("Shop A")
+    assert shop_a is not None and 8888 in [b.id for b in shop_a.bookings]
+
+
+async def test_relearn_flags_a_merchant_booked_more_than_one_way(client, fake, path):
+    fake.transactions.append(
+        make_transaction(4, iban=PROVIDER, name="Shop A", entry_date="2025-06-01")
+    )
+    fake.add_booking(4, 11, 20)
+
+    result = await relearn(client, path)
+
+    flags = {m["name"]: m["mixed"] for m in result.structured_content["merchants"]}
+    assert flags == {"Shop A": True, "Shop B": False}

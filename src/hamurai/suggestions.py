@@ -10,7 +10,7 @@ from datetime import date
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, field_validator
 
 from hamurai.config import ROOT
 from hamurai.models import Booking, Transaction
@@ -98,9 +98,14 @@ class Suggestions(BaseModel):
     # transactions are matched and learned by the merchant's name, never by the IBAN.
     provider_ibans: list[str] = []
 
+    @field_validator("provider_ibans")
+    @classmethod
+    def _normalised(cls, ibans: list[str]) -> list[str]:
+        return list(dict.fromkeys(i for i in map(normalize_iban, ibans) if i is not None))
+
     def is_provider(self, iban: str | None) -> bool:
         key = normalize_iban(iban)
-        return key is not None and key in {normalize_iban(p) for p in self.provider_ibans}
+        return key is not None and key in self.provider_ibans
 
     def by_iban(self, iban: str | None) -> Entry | None:
         key = normalize_iban(iban)
