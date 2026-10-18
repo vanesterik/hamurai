@@ -133,3 +133,28 @@ def test_category_filter():
 def test_unknown_grouping_is_refused():
     with pytest.raises(ValueError):
         list_suggestions(SUGGESTIONS, LABELS, group_by="colour")  # ty: ignore[invalid-argument-type]
+
+
+def test_limit_keeps_the_busiest_and_counts_the_rest():
+    listing = list_suggestions(SUGGESTIONS, LABELS, group_by="vat", limit=2)
+
+    hoog = listing.groups[1]
+    assert names(hoog) == ["Nebius", "Own account"]
+    assert hoog.more == 1
+    assert listing.groups[0].more == 0
+    assert listing.entries == 4
+
+
+def test_ten_per_group_by_default_and_none_for_all():
+    many = Suggestions(
+        entries=[entry(f"Shop {i:02}", None, (10, 20, "2026-09-01")) for i in range(12)]
+    )
+
+    assert len(list_suggestions(many, LABELS).groups[0].entries) == 10
+    assert list_suggestions(many, LABELS).groups[0].more == 2
+    assert len(list_suggestions(many, LABELS, limit=None).groups[0].entries) == 12
+
+
+def test_limit_below_one_is_refused():
+    with pytest.raises(ValueError):
+        list_suggestions(SUGGESTIONS, LABELS, limit=0)

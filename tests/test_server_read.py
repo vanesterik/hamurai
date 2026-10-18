@@ -304,6 +304,7 @@ async def test_list_suggestions_groups_what_was_learned(client, fake, path):
         by_match = await session.call_tool(
             "list_suggestions", {"group_by": "match", "text": "acme"}
         )
+        limited = await session.call_tool("list_suggestions", {"limit": 1})
         refused = await session.call_tool("list_suggestions", {"group_by": "colour"})
 
     assert not by_category.is_error, text(by_category)
@@ -311,5 +312,6 @@ async def test_list_suggestions_groups_what_was_learned(client, fake, path):
     assert data["entries"] == 2
     assert [g["title"] for g in data["groups"]] == ["4500 Kantoorkosten / 21% hoog"]
     assert [e["name"] for e in by_match.structured_content["groups"][0]["entries"]] == ["Acme"]
+    assert [g["more"] for g in limited.structured_content["groups"]] == [1]
     assert refused.is_error
     assert [r for r in fake.requests if r.method != "GET"] == []

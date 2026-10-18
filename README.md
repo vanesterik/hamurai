@@ -19,7 +19,7 @@ The design is in `docs/specs/2026-10-17-hamurai-booking-mcp-design.md`, the impl
 | Tool | Writes to | What it does |
 |---|---|---|
 | `list_categories`, `list_vat_codes` | nothing | Hamurai's categories (ID, code, name) and VAT codes (ID, description). |
-| `list_suggestions(group_by, text, category_id)` | nothing | Lists what has been learned: every counterparty once, under the pair it is proposed with, grouped by `category` (category and VAT code), `vat` or `match` (always ask, by IBAN, by name). Patterns and provider IBANs come apart. |
+| `list_suggestions(group_by, text, category_id, limit)` | nothing | Lists what has been learned: every counterparty once, under the pair it is proposed with, grouped by `category` (category and VAT code), `vat` or `match` (always ask, by IBAN, by name), the busiest `limit` per group. Patterns and provider IBANs come apart. |
 | `propose_bookings(start_date, end_date)` | nothing | Proposes a category and VAT code for each unbooked transaction in the period, in four groups: `confident` (IBAN match), `uncertain` (name or description match), `unknown` (no match) and `skipped` (partly booked, never touched). Each proposal says why. |
 | `seed_suggestions` | nothing | Reads the whole booking history and builds the suggestions in memory. Lists the counterparties booked under more than one category or VAT code. |
 | `save_suggestions(resolutions)` | `data/suggestions.yaml` | Writes the seeded suggestions, with your choice for each flagged counterparty. Refuses if the file already exists. |
@@ -150,7 +150,7 @@ Only a pair nothing else could fit is `confident`: Claude shows those as one tab
 - `vat`: by VAT code alone, to check rates across categories;
 - `match`: by how a counterparty is matched: *always ask*, *by IBAN* (proposed as confident), or *by name* (card merchants, payment-provider merchants, counterparties without an IBAN).
 
-A text narrows it to names or IBANs containing it, a category to that category. The patterns and provider IBANs are listed apart. It writes nothing: to change a suggestion, book the next payment differently, or edit `data/suggestions.yaml`.
+Each group shows its ten busiest counterparties and says how many more there are; ask for more, or for all of them, when you want the rest (all of them at once can be too long for one answer). A text narrows it to names or IBANs containing it, a category to that category. The patterns and provider IBANs are listed apart. It writes nothing: to change a suggestion, book the next payment differently, or edit `data/suggestions.yaml`.
 
 ### Add a description pattern
 

@@ -17,6 +17,8 @@ from hamurai.suggestions import Entry, Pair, Suggestions, normalize_iban, normal
 type GroupBy = Literal["category", "vat", "match"]
 # The `match` groups, in the order they are listed.
 MATCH_GROUPS = ("always ask", "by IBAN", "by name")
+# Entries shown per group by default: the whole listing is too large for one tool answer.
+LIMIT = 10
 
 
 class ListedEntry(BaseModel):
@@ -35,6 +37,8 @@ class ListedEntry(BaseModel):
 class Group(BaseModel):
     title: str
     entries: list[ListedEntry]
+    # Entries left out by the limit.
+    more: int
 
 
 class ListedPattern(BaseModel):
@@ -58,11 +62,17 @@ def list_suggestions(
     group_by: GroupBy = "category",
     text: str | None = None,
     category_id: int | None = None,
+    limit: int | None = LIMIT,
 ) -> SuggestionListing:
-    """Every entry once, grouped; `text` (a name or an IBAN) and `category_id` narrow it."""
+    """Every entry once, grouped; `text` (a name or an IBAN) and `category_id` narrow it.
+
+    Each group keeps its `limit` busiest entries and counts the rest; None keeps them all.
+    """
     title_of = _titles(labels).get(group_by)
     if title_of is None:
         raise ValueError(f"group_by must be one of {', '.join(_titles(labels))}")
+    if limit is not None and limit < 1:
+        raise ValueError("limit must be at least 1, or None for every entry")
     entries = [
         e
         for e in suggestions.entries
@@ -75,7 +85,11 @@ def list_suggestions(
     # The busiest counterparty first, then by name.
     for listed in grouped.values():
         listed.sort(key=_busiest_first)
-    groups = [Group(title=title, entries=grouped[title]) for title in order if title in grouped]
+    groups = [
+        Group(title=title, entries=grouped[title][:limit], more=len(grouped[title][limit:]))
+        for title in order
+        if title in grouped
+    ]
     patterns = [
         ListedPattern(
             contains=p.contains,
