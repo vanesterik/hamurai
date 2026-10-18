@@ -166,8 +166,27 @@ def test_invalid_contents_name_the_field(tmp_path):
     path = tmp_path / "suggestions.yaml"
     path.write_text("entries:\n  - iban: X\n    name: Y\n    bookings: [{id: notanumber}]\n")
 
-    with pytest.raises(SuggestionsFileError, match="entries.0.bookings.0.id"):
+    with pytest.raises(SuggestionsFileError, match=r"entries\.0\.bookings\.0\.id \(line 4\)"):
         load(path)
+
+
+def test_a_missing_field_gives_the_line_of_its_entry(tmp_path):
+    path = tmp_path / "suggestions.yaml"
+    path.write_text("entries:\n  - iban: X\n    bookings: []\n  - iban: Y\n    name: Z\n")
+
+    with pytest.raises(SuggestionsFileError, match=r"entries\.1\.bookings \(line 4\)"):
+        load(path)
+
+
+def test_a_disallowed_character_gives_its_line_without_quoting_it(tmp_path):
+    path = tmp_path / "suggestions.yaml"
+    path.write_text("entries:\n  - iban: X\n    name: Se\x07cret\n    bookings: []\n")
+
+    with pytest.raises(SuggestionsFileError, match="line 3") as raised:
+        load(path)
+
+    assert "\x07" not in str(raised.value)
+    assert "cret" not in str(raised.value)
 
 
 def test_save_is_atomic(tmp_path, monkeypatch):

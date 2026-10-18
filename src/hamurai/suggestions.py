@@ -11,6 +11,7 @@ from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, ValidationError, field_validator
+from yaml.reader import ReaderError
 
 from hamurai.config import ROOT
 from hamurai.models import Booking, Transaction
@@ -200,17 +201,47 @@ def load(path: Path = SUGGESTIONS_PATH) -> Suggestions:
         return Suggestions()
     try:
         data = yaml.safe_load(text)
+    except ReaderError as exc:
+        # Its own message quotes the character; the line is enough to find it.
+        line = text[: exc.position].count("\n") + 1
+        raise SuggestionsFileError(
+            f"{path.name} contains a character YAML doesn't allow at line {line}"
+        ) from None
     except yaml.MarkedYAMLError as exc:
         line = exc.problem_mark.line + 1 if exc.problem_mark else "?"
         raise SuggestionsFileError(
             f"{path.name} is not valid YAML at line {line}: {exc.problem}"
         ) from None
+    except yaml.YAMLError:
+        raise SuggestionsFileError(f"{path.name} is not valid YAML") from None
     try:
         return Suggestions.model_validate(data or {})
     except ValidationError as exc:
-        # Field locations only: pydantic's own message quotes the file's values.
-        fields = sorted({".".join(str(part) for part in error["loc"]) for error in exc.errors()})
+        # Field locations and lines only: pydantic's own message quotes the file's values.
+        root = yaml.compose(text)
+        fields = sorted(
+            {
+                f"{'.'.join(str(part) for part in error['loc'])} (line {_line(root, error['loc'])})"
+                for error in exc.errors()
+            }
+        )
         raise SuggestionsFileError(f"{path.name} has invalid fields: {', '.join(fields)}") from None
+
+
+def _line(node: yaml.Node | None, loc: tuple[int | str, ...]) -> int:
+    """The line of the deepest node the field path reaches: a missing field gives its parent's."""
+    if node is None:
+        return 1
+    for part in loc:
+        child = None
+        if isinstance(node, yaml.MappingNode):
+            child = next((v for k, v in node.value if k.value == part), None)
+        elif isinstance(node, yaml.SequenceNode) and isinstance(part, int):
+            child = node.value[part] if part < len(node.value) else None
+        if child is None:
+            break
+        node = child
+    return node.start_mark.line + 1
 
 
 def save(suggestions: Suggestions, path: Path = SUGGESTIONS_PATH) -> None:
