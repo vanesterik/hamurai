@@ -27,6 +27,7 @@ The design is in `docs/specs/2026-10-17-hamurai-booking-mcp-design.md`, the impl
 | `book_split(transaction_id, lines)` | Hamurai and `data/suggestions.yaml` | Books the proposed collection as one booking per line, all or nothing, and learns each merchant. |
 | `propose_receipts(start_date, end_date)` | nothing | Matches the unlinked receipts to the period's expenses by amount and date: `confident` pairs, `ambiguous` groups to pick from, `unmatched` receipts, and how many receipts have no amount Hamurai could read. |
 | `link_receipts(links)` | Hamurai | Links the given receipts to their transactions. |
+| `relearn_providers` | `data/suggestions.yaml` | Rebuilds what was learned on the payment providers' IBANs (`provider_ibans`), one entry per merchant. |
 | `undo_booking(booking_id)` | Hamurai and `data/suggestions.yaml` | Deletes a booking and takes back what it taught. |
 
 Amounts in tool output are in cents: `-1299` is € −12,99.
@@ -45,7 +46,7 @@ No test talks to Hamurai: they run against an in-memory fake with invented data.
 
 ### Connect
 
-Run `/mcp` in Claude Code. `hamurai` should show as connected with eleven tools. If it failed to start, run `uv run hamurai` in a terminal: it prints the reason and exits (a missing or empty variable in `.env` is named, never shown). If it starts, it waits for Claude Code; stop it with Ctrl-C.
+Run `/mcp` in Claude Code. `hamurai` should show as connected with twelve tools. If it failed to start, run `uv run hamurai` in a terminal: it prints the reason and exits (a missing or empty variable in `.env` is named, never shown). If it starts, it waits for Claude Code; stop it with Ctrl-C.
 
 After changing `.env` or the code, reconnect the server from `/mcp`: it reads `.env` only when it starts.
 
@@ -142,6 +143,21 @@ patterns:
 ```
 
 Ask Claude to list the categories and VAT codes to find the IDs. No reconnect is needed: the file is read on every call.
+
+### Payment providers
+
+Payment providers such as Adyen, Mollie and Buckaroo collect for many merchants under one IBAN, so matching by IBAN would propose one merchant's category for another. List their IBANs in `data/suggestions.yaml` by hand:
+
+```yaml
+provider_ibans:
+- NL00PROV0000000001
+```
+
+A transaction on a listed IBAN is matched and learned by its counterparty name, which is the merchant's ("Dropbox by Adyen", "Simon Levelt BV via Mollie"), never by the IBAN. Such a match is `uncertain`, so it's never in the confident table. Leave off IBANs where the counterparty name doesn't name the merchant, such as Tikkie's.
+
+After adding an IBAN, ask Claude to relearn the payment providers. `relearn_providers` reads the history booked on the listed IBANs, removes the entries under them (which mix merchants), and learns each booking again under its merchant, the latest choice winning. It writes only `data/suggestions.yaml` and is safe to run again. In a fresh setup, seed first, then list the IBANs and relearn.
+
+Comments in `data/suggestions.yaml` are lost whenever the tool saves it, so keep notes about which provider an IBAN is somewhere else.
 
 ### Refresh the session
 

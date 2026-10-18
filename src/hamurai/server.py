@@ -73,6 +73,20 @@ class SeedSummary(BaseModel):
     flagged: list[FlaggedCounterparty]
 
 
+class MerchantSummary(BaseModel):
+    name: str
+    bookings: int
+    category_id: int
+    vat_code_id: int
+    label: str
+
+
+class RelearnSummary(BaseModel):
+    merchants: list[MerchantSummary]
+    bookings: int
+    removed_entries: int
+
+
 class SaveSummary(BaseModel):
     entries: int
     path: str
@@ -476,6 +490,65 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
             raise ToolError(str(exc)) from None
         save(suggestions, state.suggestions_path)
         return SaveSummary(entries=len(suggestions.entries), path=str(state.suggestions_path))
+
+    @mcp.tool()
+    async def relearn_providers() -> RelearnSummary:
+        """Rebuild what was learned on the payment providers' IBANs, by merchant.
+
+        Reads the booking history of every IBAN in provider_ibans (one request per booked
+        transaction), removes the entries under those IBANs, which mix merchants, and learns
+        each booking again under its merchant's name; the latest choice wins. Writes only the
+        suggestions file, never Hamurai, and gives the same result when run again.
+        """
+        with tool_errors():
+            suggestions = load(state.suggestions_path)
+            if not suggestions.provider_ibans:
+                raise ToolError(
+                    "No provider_ibans in the suggestions file: list the payment providers' "
+                    "IBANs there first."
+                )
+            transactions = await client.transactions()
+            on_provider = [
+                t
+                for t in seedable(transactions)
+                if suggestions.is_provider(t.counter_account.number)
+            ]
+            bookings = await client.bookings_for_many([t.id for t in on_provider])
+            labels = await state.labels()
+        history = sorted(
+            ((t, b) for t in on_provider for b in bookings[t.id]), key=lambda row: row[0].entry_date
+        )
+        removed = [e for e in suggestions.entries if suggestions.is_provider(e.iban)]
+        suggestions.entries = [e for e in suggestions.entries if e not in removed]
+        # Taken back wherever they were learned before, so a second run counts nothing twice.
+        for _, booking in history:
+            suggestions.forget(booking.id)
+        names = []
+        for transaction, booking in history:
+            if suggestions.record(transaction, booking):
+                names.append(transaction.counter_account.name_account_holder)
+        merchants = {}
+        for name in names:
+            entry = suggestions.by_name(name)
+            if entry is not None:
+                merchants[id(entry)] = entry
+        for entry in merchants.values():
+            entry.sort_bookings()
+        save(suggestions, state.suggestions_path)
+        return RelearnSummary(
+            merchants=[
+                MerchantSummary(
+                    name=entry.name or "",
+                    bookings=len(entry.bookings),
+                    category_id=entry.current.category_id,
+                    vat_code_id=entry.current.vat_code_id,
+                    label=labels.pair(entry.current),
+                )
+                for entry in merchants.values()
+            ],
+            bookings=len(history),
+            removed_entries=len(removed),
+        )
 
     @mcp.tool()
     async def book(bookings: list[BookingLine]) -> BookResult:
