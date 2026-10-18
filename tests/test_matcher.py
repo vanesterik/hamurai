@@ -56,20 +56,21 @@ def with_description(transaction: Transaction, description: str) -> Transaction:
             unbooked(iban="nl00 test 0000 0000 01", name="Someone else"),
             Confidence.CONFIDENT,
             10,
-            "IBAN match, 14× booked as 4500 Kantoorkosten / 21% hoog, last seen 2026-01-14",
+            "IBAN match, booked 14 times as 4500 Kantoorkosten / 21% hoog, last on 2026-01-14",
         ),
         (
             unbooked(iban="NL00TEST0000000002", name="Travel Co"),
             Confidence.CONFIDENT,
             11,
-            "IBAN match, now 4600 Reiskosten / 21% hoog (1×, since 2026-10-01); "
-            "before that 14× 4500 Kantoorkosten / 21% hoog",
+            "IBAN match, now 4600 Reiskosten / 21% hoog since 2026-10-01 "
+            "(booked this way 1 time in all); "
+            "before that 14 times as 4500 Kantoorkosten / 21% hoog",
         ),
         (
             unbooked(iban=None, name="ACME  b.v."),
             Confidence.UNCERTAIN,
             10,
-            "Name match, 14× booked as 4500 Kantoorkosten / 21% hoog, last seen 2026-01-14",
+            "Name match, booked 14 times as 4500 Kantoorkosten / 21% hoog, last on 2026-01-14",
         ),
         (
             with_description(unbooked(iban=None, name=None), "ING BANKKOSTEN Q3"),
@@ -106,8 +107,9 @@ def test_older_pairs_are_listed_by_count():
     proposal = propose(unbooked(iban=IBAN), suggestions, labels)
 
     assert proposal.evidence == (
-        "IBAN match, now 4700 Overig / 21% hoog (1×, since 2026-03-01); "
-        "before that 5× 4500 Kantoorkosten / 21% hoog; 2× 4600 Reiskosten / 21% hoog"
+        "IBAN match, now 4700 Overig / 21% hoog since 2026-03-01 (booked this way 1 time in all); "
+        "before that 5 times as 4500 Kantoorkosten / 21% hoog; "
+        "2 times as 4600 Reiskosten / 21% hoog"
     )
 
 
@@ -116,7 +118,7 @@ def test_missing_label_shows_the_id():
 
     proposal = propose(unbooked(iban=IBAN), suggestions, LABELS)
 
-    assert proposal.evidence == "IBAN match, 1× booked as #99 / 21% hoog, last seen 2026-01-01"
+    assert proposal.evidence == "IBAN match, booked 1 time as #99 / 21% hoog, last on 2026-01-01"
 
 
 def test_propose_all_groups_and_skips():
@@ -153,7 +155,7 @@ def test_always_ask_is_uncertain_with_the_latest_pair_and_history():
     assert (proposal.category_id, proposal.vat_code_id) == (10, 20)
     assert proposal.evidence == (
         "IBAN match, always ask; last booked as 4500 Kantoorkosten / 21% hoog on 2026-03-01; "
-        "history 3× 4500 Kantoorkosten / 21% hoog; 3× 4600 Reiskosten / 21% hoog"
+        "history: 3 times as 4500 Kantoorkosten / 21% hoog; 3 times as 4600 Reiskosten / 21% hoog"
     )
 
 
@@ -261,3 +263,19 @@ def test_always_ask_evidence_names_the_latest_dated_booking():
 
     assert proposal.category_id == 10
     assert "on 2026-10-16" in proposal.evidence
+
+
+def test_a_pair_booked_again_after_another_counts_all_its_bookings():
+    suggestions = Suggestions(
+        entries=[
+            entry(IBAN, "A", (2, 11, "2026-01-01"), (1, 10, "2026-02-01"), (1, 11, "2026-03-01"))
+        ]
+    )
+
+    proposal = propose(unbooked(iban=IBAN), suggestions, LABELS)
+
+    assert proposal.evidence == (
+        "IBAN match, now 4600 Reiskosten / 21% hoog since 2026-03-01 "
+        "(booked this way 3 times in all); "
+        "before that 1 time as 4500 Kantoorkosten / 21% hoog"
+    )

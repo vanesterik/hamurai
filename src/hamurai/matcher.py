@@ -151,7 +151,7 @@ def _from_entry(entry: Entry, confidence: Confidence, match: str, labels: Labels
     counts = entry.counts
     if entry.always_ask:
         history = "; ".join(
-            f"{count}× {labels.pair(pair)}"
+            f"{_times(count)} as {labels.pair(pair)}"
             for pair, count in sorted(counts.items(), key=lambda item: -item[1])
         )
         return _Choice(
@@ -159,21 +159,26 @@ def _from_entry(entry: Entry, confidence: Confidence, match: str, labels: Labels
             current.category_id,
             current.vat_code_id,
             f"{match}, always ask; last booked as {labels.pair(current)} "
-            f"on {entry.latest.date}; history {history}",
+            f"on {entry.latest.date}; history: {history}",
         )
     older = sorted(
         ((count, pair) for pair, count in counts.items() if pair != current),
         key=lambda item: -item[0],
     )
     if older:
-        before = "; ".join(f"{count}× {labels.pair(pair)}" for count, pair in older)
+        before = "; ".join(f"{_times(count)} as {labels.pair(pair)}" for count, pair in older)
+        # `since` starts the current run; the count covers every booking with the pair.
         evidence = (
-            f"{match}, now {labels.pair(current)} ({counts[current]}×, since {entry.since}); "
-            f"before that {before}"
+            f"{match}, now {labels.pair(current)} since {entry.since} "
+            f"(booked this way {_times(counts[current])} in all); before that {before}"
         )
     else:
         evidence = (
-            f"{match}, {counts[current]}× booked as {labels.pair(current)}, "
-            f"last seen {entry.last_seen}"
+            f"{match}, booked {_times(counts[current])} as {labels.pair(current)}, "
+            f"last on {entry.last_seen}"
         )
     return _Choice(confidence, current.category_id, current.vat_code_id, evidence)
+
+
+def _times(count: int) -> str:
+    return "1 time" if count == 1 else f"{count} times"

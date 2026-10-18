@@ -80,7 +80,7 @@ async def test_propose_bookings_groups_the_period(client, fake, path):
     assert not result.is_error, text(result)
     proposals = result.structured_content["proposals"]
     assert [p["transaction"]["id"] for p in proposals["confident"]] == [10]
-    assert proposals["confident"][0]["evidence"].startswith("IBAN match, 2× booked as 4500")
+    assert proposals["confident"][0]["evidence"].startswith("IBAN match, booked 2 times as 4500")
     assert [p["transaction"]["id"] for p in proposals["uncertain"]] == [11]
     assert [p["transaction"]["id"] for p in proposals["unknown"]] == [12]
     assert result.structured_content["hint"] is None
