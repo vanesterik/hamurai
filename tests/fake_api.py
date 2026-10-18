@@ -299,9 +299,8 @@ class FakeHamurai:
             booking_id = self.add_booking(
                 body["transactionId"], body["generalLedgerAccountId"], body["vatCodeId"]
             )
-            # The spec records no transactionInfo in the POST response; only the GET has it.
-            created = {k: v for k, v in self.bookings[booking_id].items() if k != "transactionInfo"}
-            return httpx.Response(201, json=created)
+            # As recorded from the web app: the answer is the booking, transactionInfo included.
+            return httpx.Response(200, json=self.bookings[booking_id])
         if request.method == "POST" and (match := re.fullmatch(r"/reconciliations/(\d+)", route)):
             if int(match[1]) not in self.bookings:
                 return _error(404, "Unknown booking")

@@ -439,3 +439,46 @@ async def test_unreadable_file_hides_its_values(client, fake):
         await client.files(date(2026, 1, 1))
 
     assert "SECRET-FILE" not in str(error.value)
+
+
+def _answering(fake, route_suffix: str, change) -> None:
+    """Rewrite the fake's JSON answer on one POST route, as Hamurai might send it."""
+    respond = fake._respond
+
+    def rewritten(request):
+        response = respond(request)
+        if request.method == "POST" and request.url.path.endswith(route_suffix):
+            return httpx.Response(response.status_code, json=change(response.json()))
+        return response
+
+    fake._respond = rewritten
+
+
+async def test_update_answer_with_null_transaction_info(client, fake):
+    fake.transactions.append(make_transaction(1, iban=None, name="Card", amount=-9761))
+    booking = await client.create_booking(1, 10, 20)
+    _answering(fake, f"/reconciliations/{booking.id}", lambda a: {**a, "transactionInfo": None})
+
+    updated = await client.update_booking(
+        booking.id,
+        1,
+        amount_cents=-1299,
+        category_id=10,
+        vat_code_id=20,
+        description="ACME SOFTWARE",
+        entry_date=date(2026, 9, 21),
+    )
+
+    assert (updated.transaction_id, updated.amount_cents) == (1, -1299)
+
+
+async def test_create_answer_includes_transaction_info(client, fake):
+    # As recorded from the web app: a create's answer carries transactionInfo too.
+    fake.transactions.append(make_transaction(1, iban=None, name="Card", amount=-9761))
+    answers = []
+    _answering(fake, "/reconciliations", lambda a: answers.append(a) or a)
+
+    booking = await client.create_booking(1, 10, 20)
+
+    assert [a["transactionInfo"]["id"] for a in answers] == [1]
+    assert booking.transaction_id == 1

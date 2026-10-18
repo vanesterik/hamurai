@@ -178,7 +178,7 @@ class HamuraiClient:
             raise BookingOutcomeUnknown() from None
         _checked(response)
         try:
-            # The POST answer has no transactionInfo, so the transaction ID comes from the request.
+            # The transaction ID comes from the request, whatever the answer says of it.
             return Booking.model_validate(
                 {**response.json(), "transactionInfo": {"id": transaction_id}}
             )
@@ -216,7 +216,7 @@ class HamuraiClient:
         _checked(response)
         try:
             return Booking.model_validate(
-                {"transactionInfo": {"id": transaction_id}, **response.json()}
+                {**response.json(), "transactionInfo": {"id": transaction_id}}
             )
         except ValueError:
             raise BookingOutcomeUnknown() from None
