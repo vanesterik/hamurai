@@ -200,3 +200,12 @@ def test_unreadable_csv_is_refused(tmp_path):
         read_statement(path)
 
     assert "xxx" not in str(error.value)
+
+
+def test_parse_amount_accepts_a_plus_and_a_typographic_minus():
+    assert parse_amount("+20,00") == 2000
+    assert parse_amount("−12,99") == -1299
+    assert parse_amount("−1.234,56") == -123456
+    for text in ("+-12,99", "--12,99", "-+12,99", "++1,00"):
+        with pytest.raises(ValueError):
+            parse_amount(text)

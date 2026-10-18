@@ -18,7 +18,8 @@ from hamurai.suggestions import normalize_name
 # The previous collection arriving on the card account: not a purchase.
 PAYMENT_PREFIX = "BETALING ONTVANGEN"
 COLUMNS = ("Transactiedatum", "Boekingsdatum", "Omschrijving", "Bedrag in EUR")
-_AMOUNT = re.compile(r"(-?)(\d{1,3}(?:\.\d{3})+|\d+),(\d{2})")
+# One optional sign: "-", the typographic minus U+2212, or "+".
+_AMOUNT = re.compile(r"([-\u2212+]?)(\d{1,3}(?:\.\d{3})+|\d+),(\d{2})")
 
 
 # Why a row is not a line: the card payment, a refunded purchase and its refund, or nothing to
@@ -85,7 +86,7 @@ def parse_amount(text: str) -> int:
         raise ValueError("not an amount")
     sign, whole, cents = match.groups()
     value = int(whole.replace(".", "")) * 100 + int(cents)
-    return -value if sign else value
+    return -value if sign in ("-", "\u2212") else value
 
 
 def read_statement(path: Path) -> Statement:
