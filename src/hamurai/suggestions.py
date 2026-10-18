@@ -53,6 +53,12 @@ class Entry(BaseModel):
     always_ask: bool = False
     bookings: list[LearnedBooking]
 
+    # Learned IBANs are stored normalised; one typed by hand in the file may not be.
+    @field_validator("iban")
+    @classmethod
+    def _normalised(cls, iban: str | None) -> str | None:
+        return normalize_iban(iban)
+
     @property
     def by_date(self) -> list[LearnedBooking]:
         """The bookings by date. Stable: on one date, the booking learned last comes last."""

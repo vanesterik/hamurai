@@ -338,3 +338,17 @@ def test_on_the_same_date_the_booking_learned_last_wins():
 
     assert entry.current.category_id == 11
     assert entry.since == date(2026, 10, 2)
+
+
+def test_a_hand_typed_iban_is_normalised_when_read(tmp_path):
+    path = tmp_path / "suggestions.yaml"
+    path.write_text(
+        "entries:\n- iban: nl00 test 0000 0000 01\n  name: Acme B.V.\n  bookings:\n"
+        "  - {id: 1, category_id: 10, vat_code_id: 20, date: 2026-07-01}\n"
+    )
+    suggestions = load(path)
+
+    assert suggestions.by_iban(IBAN) is suggestions.entries[0]
+    assert suggestions.record(tx(2, name=None), booking(2, 2))
+    assert len(suggestions.entries) == 1
+    assert len(suggestions.entries[0].bookings) == 2
