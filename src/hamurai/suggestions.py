@@ -255,11 +255,13 @@ def save(suggestions: Suggestions, path: Path = SUGGESTIONS_PATH) -> None:
         del data["provider_ibans"]
     text = yaml.safe_dump(data, sort_keys=False, default_flow_style=None, allow_unicode=True)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
+    temporary = tempfile.NamedTemporaryFile(
         "w", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
-    ) as temporary:
-        temporary.write(text)
+    )
+    # A failed write or rename removes the temporary file: nothing is left beside the file.
     try:
+        with temporary:
+            temporary.write(text)
         os.replace(temporary.name, path)
     except BaseException:
         Path(temporary.name).unlink(missing_ok=True)

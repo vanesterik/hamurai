@@ -1,3 +1,4 @@
+import tempfile
 from datetime import date
 
 import pytest
@@ -200,6 +201,30 @@ def test_save_is_atomic(tmp_path, monkeypatch):
     monkeypatch.setattr(yaml, "safe_dump", broken_dump)
 
     with pytest.raises(RuntimeError):
+        save(learned(11), path)
+
+    assert path.read_text() == original
+    assert [p.name for p in tmp_path.iterdir()] == ["suggestions.yaml"]
+
+
+def test_a_failed_write_leaves_no_temporary_file(tmp_path, monkeypatch):
+    path = tmp_path / "suggestions.yaml"
+    save(learned(10), path)
+    original = path.read_text()
+    real = tempfile.NamedTemporaryFile
+
+    def failing_write(*args, **kwargs):
+        temporary = real(*args, **kwargs)
+
+        def write(text: str) -> int:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(temporary, "write", write)
+        return temporary
+
+    monkeypatch.setattr(tempfile, "NamedTemporaryFile", failing_write)
+
+    with pytest.raises(OSError, match="disk full"):
         save(learned(11), path)
 
     assert path.read_text() == original
