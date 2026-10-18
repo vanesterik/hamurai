@@ -518,12 +518,17 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
         true, for a counterparty with no single right category (it is then always proposed as
         uncertain, with its history as evidence).
 
-        Refuses when the suggestions file already exists: it is seeded only once.
+        Refuses when the suggestions file already exists: it is seeded only once. To seed after
+        all, the file has to be deleted, losing everything learned or written in it by hand.
         """
         if state.draft is None:
             raise ToolError("Nothing to save: run seed_suggestions first.")
         if state.suggestions_path.exists():
-            raise ToolError(f"{state.suggestions_path} already exists; it is never overwritten.")
+            raise ToolError(
+                f"{state.suggestions_path} already exists; it is never overwritten. To seed after"
+                " all, delete it (losing everything learned or written in it by hand) and run"
+                " seed_suggestions again."
+            )
         try:
             suggestions = resolve(state.draft, resolutions)
         except UnresolvedError as exc:

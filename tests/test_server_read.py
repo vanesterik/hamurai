@@ -179,6 +179,8 @@ async def test_save_suggestions_refuses_to_overwrite(client, fake, path):
         )
 
     assert result.is_error
+    assert "delete it" in text(result)
+    assert "run seed_suggestions again" in text(result)
     assert path.read_text() == "entries: []\n"
 
 
