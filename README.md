@@ -108,7 +108,7 @@ The card company collects each month's purchases as one bank transaction. Downlo
 
 A credit with no purchase of the same amount in the file, such as a refund for something on an earlier statement, is a line of its own with a positive amount: it lowers its category's costs, and it is booked after the purchases.
 
-The lines must add up to one unbooked bank transaction, within 45 days of the statement's last booking date. If none matches, or more than one does, it refuses and nothing is booked.
+The lines must add up to one unbooked bank transaction dated from the statement's first booking date to 45 days after its last one. If none matches, or more than one does, it refuses and nothing is booked.
 
 Claude shows the confident lines as one table and the rest one at a time, as when booking a quarter. For a merchant it hasn't seen, it proposes a category and picks the VAT code by where the merchant is: "Geen / Vrijgesteld" outside the EU, 21% inside it. Every line is booked, so correct a line rather than strike it.
 
