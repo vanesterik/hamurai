@@ -301,3 +301,14 @@ async def test_a_failed_link_releases_its_receipt(client, fake, path):
 
     assert not again.is_error, text(again)
     assert statuses(again) == [(5, "linked")]
+
+
+async def test_an_unexpected_error_while_linking_is_not_an_unknown_outcome(client, fake, path):
+    fake.fail_attaches = [RuntimeError("a bug, not Hamurai")]
+    async with connected(client, path) as session:
+        failed = await link_receipts(session, link(5, BANK))
+        again = await session.call_tool("link_receipts", {"links": [link(5, BANK)]})
+
+    assert failed.is_error
+    assert not again.is_error, text(again)
+    assert statuses(again) == [(5, "linked")]

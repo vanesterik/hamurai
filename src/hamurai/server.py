@@ -18,7 +18,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
-from hamurai.client import HamuraiClient, HamuraiError, SessionExpired
+from hamurai.client import BookingOutcomeUnknown, HamuraiClient, HamuraiError, SessionExpired
 from hamurai.config import ConfigError, load_config
 from hamurai.matcher import Labels, LineProposal, ProposalSet, propose_all, propose_line
 from hamurai.models import Booking, Category, Transaction, VatCode
@@ -417,7 +417,8 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
                     )
                 )
                 continue
-            except Exception:
+            except BookingOutcomeUnknown:
+                # Only an unanswered request is an unknown outcome: a bug surfaces as one.
                 results.append(
                     LinkResult(
                         **link.model_dump(),
