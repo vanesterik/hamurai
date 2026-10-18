@@ -39,10 +39,13 @@ You talk to Claude in plain words; it picks the tools. The prompts below are exa
 ### Check the code
 
 ```bash
-uv run pytest && uv run ruff check && uv run ruff format --check && uv run ty check
+task setup   # once: install from the lockfile and the git hooks
+task check   # lint, type check and tests
 ```
 
-No test talks to Hamurai: they run against an in-memory fake with invented data.
+`task --list` shows the rest (`format`, `lint`, `typecheck`, `test`, `pre-commit`). The git hooks run the same checks: pre-commit over the staged files, pre-push the whole of `task check`. CI runs `task check` on every pull request and every push to `main`, except for changes to Markdown and `docs/` only.
+
+No test talks to Hamurai: they run against an in-memory fake with invented data, so CI needs no secrets.
 
 ### Connect
 

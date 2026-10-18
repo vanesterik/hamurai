@@ -1,0 +1,48 @@
+name: CI
+
+# Markdown-only changes start no run: every story's design and plan land as
+# commits of their own, and none of them can fail a gate that only reads the
+# code. A push that touches both docs and code still runs, because the filter
+# is per push, not per file.
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+
+# Supersede a run you have already replaced by pushing again. A push to main is
+# never cancelled: that run is the only thing that proves main is green. On a
+# pull request the ref is refs/pull/N/merge, so runs are grouped per pull
+# request and one never cancels another's.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# One job running `task check`, the same command the pre-push hook runs, so CI
+# and the local gate cannot drift apart. No test talks to Hamurai, so the job
+# needs no secrets.
+jobs:
+  ci:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+
+      - uses: arduino/setup-task@v3.0.0
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: uv sync --locked
+
+      - run: task check

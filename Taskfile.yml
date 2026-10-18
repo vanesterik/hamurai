@@ -1,0 +1,56 @@
+# The entrypoint for the project's checks. Wraps the uv commands rather than
+# restating them, so the git hooks, CI and a developer at the terminal all run
+# the same thing.
+#
+# There is no `dev` or `build`: the MCP server is started by Claude Code from
+# `.mcp.json` (`uv run hamurai`), and it runs from source.
+version: '3'
+
+output: prefixed
+
+tasks:
+  setup:
+    desc: Install from the lockfile and wire up the git hooks
+    cmds:
+      - uv sync
+      # lefthook comes from the system (mise or homebrew), not from the project.
+      - lefthook install
+
+  check:
+    desc: Run every check the gates run
+    cmds:
+      - task: lint
+      - task: typecheck
+      - task: test
+
+  lint:
+    desc: Check formatting and lint, without writing
+    prefix: lint
+    cmds:
+      - uv run ruff format --check .
+      - uv run ruff check .
+
+  format:
+    desc: Format and apply lint fixes
+    prefix: format
+    cmds:
+      - uv run ruff format .
+      - uv run ruff check . --fix
+
+  typecheck:
+    desc: Type check
+    prefix: typecheck
+    cmds:
+      - uv run ty check
+
+  test:
+    desc: Run the test suite
+    prefix: test
+    cmds:
+      - uv run pytest
+
+  pre-commit:
+    desc: Run the checks the git pre-commit hook runs, over staged files
+    prefix: pre-commit
+    cmds:
+      - lefthook run pre-commit

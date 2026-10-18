@@ -1,0 +1,33 @@
+# pre-commit only sees staged files, so pre-push runs the whole gate: `task
+# check` rather than the commands it wraps, so this cannot fall behind the
+# Taskfile the way a copied list would. Skip a single push with
+# `git push --no-verify` when you mean to.
+#
+# It goes through `mise exec` when `task` is not already on PATH. lefthook runs
+# its commands in `sh`, which does not get the activated environment an
+# interactive shell has, so from an editor's git integration a plain `task`
+# fails with `task: command not found` while `mise` itself still resolves.
+pre-push:
+  commands:
+    check:
+      run: if command -v task >/dev/null 2>&1; then task check; else mise exec -- task check; fi
+
+pre-commit:
+  commands:
+    ruff-format:
+      priority: 2
+      glob: '*.py'
+      run: uv run ruff format {staged_files}
+      stage_fixed: true
+    ruff-check:
+      priority: 2
+      glob: '*.py'
+      run: uv run ruff check {staged_files} --fix
+    ty:
+      priority: 2
+      glob: '*.py'
+      run: uv run ty check {staged_files}
+    pytest:
+      priority: 2
+      glob: '*.py'
+      run: uv run pytest
