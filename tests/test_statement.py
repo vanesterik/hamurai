@@ -173,3 +173,19 @@ def test_unreadable_file_is_refused(tmp_path):
     path.write_bytes(b'"Omschrijving"\r\n"caf\xe9"\r\n')
     with pytest.raises(StatementError, match="UTF-8"):
         read_statement(path)
+
+
+def test_zero_row_is_left_out(tmp_path):
+    rows = [ACME, ("2026-08-05", "2026-08-06", "WAIVED FEE", "0,00"), CLOUD]
+    statement = read_statement(write_statement(tmp_path, rows))
+
+    assert [line.description for line in statement.lines] == ["ACME SOFTWARE", "EXAMPLE CLOUD"]
+    assert [(o.reason, o.description, o.amount_cents) for o in statement.left_out] == [
+        ("zero", "WAIVED FEE", 0)
+    ]
+
+
+def test_statement_with_only_a_zero_row_is_refused(tmp_path):
+    rows = [("2026-08-05", "2026-08-06", "WAIVED FEE", "0,00")]
+    with pytest.raises(StatementError, match="no purchases"):
+        read_statement(write_statement(tmp_path, rows))

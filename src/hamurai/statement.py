@@ -21,6 +21,11 @@ COLUMNS = ("Transactiedatum", "Boekingsdatum", "Omschrijving", "Bedrag in EUR")
 _AMOUNT = re.compile(r"(-?)(\d{1,3}(?:\.\d{3})+|\d+),(\d{2})")
 
 
+# Why a row is not a line: the card payment, a refunded purchase and its refund, or nothing to
+# book (a waived fee).
+type Reason = Literal["card payment", "refunded", "refund", "zero"]
+
+
 class StatementError(Exception):
     """The statement can't be split. Nothing is booked."""
 
@@ -37,7 +42,7 @@ class LeftOut(BaseModel, frozen=True):
     transaction_date: date
     description: str
     amount_cents: int
-    reason: Literal["card payment", "refunded", "refund"]
+    reason: Reason
 
 
 class Statement(BaseModel):
@@ -64,7 +69,7 @@ class _Row(BaseModel, frozen=True):
     description: str
     amount_cents: int
 
-    def left_out(self, reason: Literal["card payment", "refunded", "refund"]) -> LeftOut:
+    def left_out(self, reason: Reason) -> LeftOut:
         return LeftOut(
             transaction_date=self.transaction_date,
             description=self.description,
@@ -87,7 +92,9 @@ def read_statement(path: Path) -> Statement:
     """The statement's lines: its purchases, and any credit without a matching purchase. The
     card payment and refunded purchases, with their refunds, are left out."""
     rows = _read_rows(path)
-    left_out = [r.left_out("card payment") for r in rows if _is_payment(r)]
+    left_out = [r.left_out("zero") for r in rows if r.amount_cents == 0]
+    rows = [r for r in rows if r.amount_cents != 0]
+    left_out += [r.left_out("card payment") for r in rows if _is_payment(r)]
     purchases = [r for r in rows if r.amount_cents < 0]
     refunds = [r for r in rows if r.amount_cents >= 0 and not _is_payment(r)]
     credits = []

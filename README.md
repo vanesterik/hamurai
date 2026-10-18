@@ -97,10 +97,11 @@ The card company collects each month's purchases as one bank transaction. Downlo
 
 > Split the card collection from this statement: ~/Desktop/statement.csv
 
-`propose_split` reads the file itself, so the card number, account number and name on the card never show up in the conversation. It leaves out two kinds of rows and lists them:
+`propose_split` reads the file itself, so the card number, account number and name on the card never show up in the conversation. It leaves out three kinds of rows and lists them:
 
 - the payment row (`BETALING ONTVANGEN - DANK U`): the previous collection arriving on the card account;
-- a purchase that was refunded for the same amount, together with its refund.
+- a purchase that was refunded for the same amount, together with its refund;
+- a row of 0,00, such as a waived fee: there is nothing to book.
 
 A credit with no purchase of the same amount in the file, such as a refund for something on an earlier statement, is a line of its own with a positive amount: it lowers its category's costs, and it is booked after the purchases.
 
