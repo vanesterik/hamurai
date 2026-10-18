@@ -189,3 +189,14 @@ def test_statement_with_only_a_zero_row_is_refused(tmp_path):
     rows = [("2026-08-05", "2026-08-06", "WAIVED FEE", "0,00")]
     with pytest.raises(StatementError, match="no purchases"):
         read_statement(write_statement(tmp_path, rows))
+
+
+def test_unreadable_csv_is_refused(tmp_path):
+    # Python's csv reads on past an unclosed quote, but refuses a field over its size limit.
+    path = tmp_path / "huge.csv"
+    path.write_text(",".join(HEADER) + "\r\n" + "x" * 200_000 + "\r\n")
+
+    with pytest.raises(StatementError, match="can't be read as CSV") as error:
+        read_statement(path)
+
+    assert "xxx" not in str(error.value)

@@ -132,12 +132,18 @@ def _read_rows(path: Path) -> list[_Row]:
     except OSError:
         raise StatementError(f"{path.name} can't be read") from None
     reader = csv.DictReader(io.StringIO(text, newline=""))
-    missing = [c for c in COLUMNS if c not in (reader.fieldnames or [])]
+    try:
+        fieldnames = reader.fieldnames
+        records = list(reader)
+    except csv.Error:
+        # Never csv's own message: it can quote the file.
+        raise StatementError(f"{path.name} can't be read as CSV") from None
+    missing = [c for c in COLUMNS if c not in (fieldnames or [])]
     if missing:
         raise StatementError(f"{path.name} has no column {', '.join(missing)}")
     rows = []
     number = 0
-    for record in reader:
+    for record in records:
         if not any((value or "").strip() for value in record.values() if isinstance(value, str)):
             continue
         number += 1
