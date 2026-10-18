@@ -435,3 +435,15 @@ async def test_book_split_books_a_credit_last(client, fake, path, tmp_path):
     assert result.structured_content["status"] == "booked"
     assert [b["amountInCents"] for b in bookings_on_collection(fake)] == [-1299, -8462, 750]
     assert fake.transactions[0]["isFullyReconciled"]
+
+
+async def test_an_update_that_keeps_another_amount_rolls_back(client, fake, path, statement):
+    fake.ignore_update_amounts = True
+    async with connected(client, path) as session:
+        result = await book_split(session, statement)
+
+    data = result.structured_content
+    assert data["status"] == "rolled_back"
+    assert "amount" in data["message"]
+    assert bookings_on_collection(fake) == []
+    assert load(path).by_name("EXAMPLE CLOUD") is None

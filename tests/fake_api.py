@@ -106,6 +106,7 @@ class FakeHamurai:
         self.fail_attaches: list[Failure] = []
         self.files: list[dict[str, Any]] = []
         self.repeat_last_page = False
+        self.ignore_update_amounts = False
         self.delay = 0.0
         self.in_flight = 0
         self.max_in_flight = 0
@@ -155,7 +156,9 @@ class FakeHamurai:
         booking = self.bookings[booking_id]
         category = next(c for c in self.categories if c["id"] == body["generalLedgerAccountId"])
         vat_code = next(v for v in self.vat_codes if v["id"] == body["vatCodeId"])
-        booking["amountInCents"] = body["amount"]
+        # As if Hamurai answered 200 but kept the amount it had.
+        if not self.ignore_update_amounts:
+            booking["amountInCents"] = body["amount"]
         booking["generalLedgerAccountInfo"] = {
             "id": category["id"],
             "type": category["type"],

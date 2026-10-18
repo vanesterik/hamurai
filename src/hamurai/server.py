@@ -764,7 +764,7 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
                     failure = CollectionChanged()
                     break
                 try:
-                    await client.update_booking(
+                    updated = await client.update_booking(
                         created.id,
                         transaction_id,
                         amount_cents=line.amount_cents,
@@ -775,6 +775,11 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
                     )
                 except Exception as exc:
                     failure = exc
+                    break
+                # A 200 is not enough: the booking must hold the line's amount, or the last
+                # line takes up whatever is left and the lines come out wrong.
+                if updated.amount_cents != line.amount_cents:
+                    failure = AmountNotTaken()
                     break
                 remainder -= line.amount_cents
         except BaseException:
@@ -834,6 +839,10 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
     return mcp
 
 
+class AmountNotTaken(Exception):
+    """Hamurai answered an update without the line's amount."""
+
+
 class CollectionChanged(Exception):
     """A new booking didn't get the expected remainder: the collection was booked meanwhile."""
 
@@ -874,6 +883,8 @@ async def _roll_back(
         reason = "The split was cancelled."
     elif isinstance(failure, HamuraiError):
         reason = f"The split stopped: {failure}."
+    elif isinstance(failure, AmountNotTaken):
+        reason = "The split stopped: Hamurai didn't take a line's amount."
     elif isinstance(failure, CollectionChanged):
         reason = "The split stopped: the collection was booked while it was being split."
     elif isinstance(failure, SessionExpired):
