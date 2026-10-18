@@ -8,7 +8,7 @@ from conftest import COOKIE
 from fake_api import make_transaction
 from mcp import Client
 
-from hamurai.server import SESSION_EXPIRED, build_server, quiet_logs
+from hamurai.server import QUIET_LOGGERS, SESSION_EXPIRED, build_server, quiet
 
 pytestmark = pytest.mark.anyio
 
@@ -322,7 +322,7 @@ async def test_list_suggestions_groups_what_was_learned(client, fake, path):
 
 @pytest.fixture
 def restored_log_levels():
-    loggers = [logging.getLogger(name) for name in ("httpx", "mcp.server.mcpserver.server")]
+    loggers = [logging.getLogger(name) for name in QUIET_LOGGERS]
     levels = [logger.level for logger in loggers]
     yield
     for logger, level in zip(loggers, levels, strict=True):
@@ -336,7 +336,7 @@ async def test_tool_errors_are_not_logged(client, path, caplog):
         await session.call_tool("save_suggestions", {"resolutions": []})
         logged = [r.getMessage() for r in caplog.records]
         caplog.clear()
-        quiet_logs()
+        quiet(map(logging.getLogger, QUIET_LOGGERS))
         result = await session.call_tool("save_suggestions", {"resolutions": []})
 
     assert any("Nothing to save" in message for message in logged)
