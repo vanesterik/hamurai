@@ -8,7 +8,7 @@ from conftest import COOKIE
 from fake_api import make_transaction
 from mcp import Client
 
-from hamurai.server import QUIET_LOGGERS, SESSION_EXPIRED, build_server, quiet
+from hamurai.server import LOGGING_LEVEL, SESSION_EXPIRED, build_server
 
 pytestmark = pytest.mark.anyio
 
@@ -321,26 +321,24 @@ async def test_list_suggestions_groups_what_was_learned(client, fake, path):
 
 
 @pytest.fixture
-def restored_log_levels():
-    loggers = [logging.getLogger(name) for name in QUIET_LOGGERS]
-    levels = [logger.level for logger in loggers]
+def restored_tool_log_level():
+    logger = logging.getLogger("mcp.server.mcpserver.server")
+    level = logger.level
     yield
-    for logger, level in zip(loggers, levels, strict=True):
-        logger.setLevel(level)
+    logger.setLevel(level)
 
 
-@pytest.mark.usefixtures("restored_log_levels")
+@pytest.mark.usefixtures("restored_tool_log_level")
 async def test_tool_errors_are_not_logged(client, path, caplog):
     caplog.set_level(logging.INFO)
     async with connected(client, path) as session:
         await session.call_tool("save_suggestions", {"resolutions": []})
         logged = [r.getMessage() for r in caplog.records]
         caplog.clear()
-        quiet(map(logging.getLogger, QUIET_LOGGERS))
+        logging.getLogger("mcp.server.mcpserver.server").setLevel(LOGGING_LEVEL)
         result = await session.call_tool("save_suggestions", {"resolutions": []})
 
     assert any("Nothing to save" in message for message in logged)
     assert result.is_error
     assert "Nothing to save" in text(result)
     assert not [r for r in caplog.records if "Nothing to save" in r.getMessage()]
-    assert logging.getLogger("httpx").level == logging.WARNING

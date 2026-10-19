@@ -3,7 +3,7 @@
 import logging
 import re
 import sys
-from collections.abc import Generator, Iterable
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -961,19 +961,8 @@ async def _roll_back(
     )
 
 
-# Loggers that would put bookkeeping data in the server's stderr log at INFO.
-QUIET_LOGGERS = (
-    # Every request URL; Hamurai's URLs carry the administration ID.
-    "httpx",
-    # Each tool error's text: IDs, amounts and IBANs. Claude gets it in the result anyway.
-    "mcp.server.mcpserver.server",
-)
-
-
-def quiet(loggers: Iterable[logging.Logger]) -> None:
-    """Raise each logger to WARNING."""
-    for logger in loggers:
-        logger.setLevel(logging.WARNING)
+# For the libraries that would log bookkeeping data to the server's stderr at INFO.
+LOGGING_LEVEL = logging.WARNING
 
 
 def main() -> None:
@@ -983,5 +972,8 @@ def main() -> None:
     except (ConfigError, SuggestionsFileError) as exc:
         print(f"hamurai: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
-    quiet(map(logging.getLogger, QUIET_LOGGERS))
+    # httpx logs every request URL at INFO; Hamurai's URLs carry the administration ID.
+    logging.getLogger("httpx").setLevel(LOGGING_LEVEL)
+    # The SDK logs each tool error's text at INFO: IDs, amounts and IBANs. Claude gets it anyway.
+    logging.getLogger("mcp.server.mcpserver.server").setLevel(LOGGING_LEVEL)
     build_server(HamuraiClient(config)).run()
