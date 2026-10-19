@@ -1,8 +1,8 @@
 import httpx
 import pytest
-from conftest import COOKIE
+from conftest import COOKIE, connected, text
 from fake_api import make_transaction
-from test_server_read import IBAN, OTHER_IBAN, connected, text
+from test_server_read import IBAN, OTHER_IBAN
 
 from hamurai.server import SESSION_EXPIRED
 from hamurai.suggestions import Entry, LearnedBooking, Pair, Suggestions, load, save
@@ -194,7 +194,8 @@ async def test_undo_of_unknown_booking_is_an_error(client, fake, path):
         result = await session.call_tool("undo_booking", {"booking_id": 424242})
 
     assert result.is_error
-    assert "404" in text(result)
+    assert "No booking 424242, in Hamurai or learned." in text(result)
+    assert "Hamurai answered" not in text(result)
 
 
 async def test_undo_keeps_suggestions_when_delete_fails(client, fake, path):

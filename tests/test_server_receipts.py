@@ -1,8 +1,8 @@
 import anyio
 import httpx
 import pytest
+from conftest import connected, text
 from fake_api import make_file, make_transaction
-from test_server_read import connected, text
 
 from hamurai.server import SESSION_EXPIRED
 

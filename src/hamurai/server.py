@@ -43,7 +43,8 @@ RECEIPT_LOOKBACK = timedelta(days=45)
 
 class ProposeResult(BaseModel):
     proposals: ProposalSet
-    hint: str | None
+    # About the run as a whole, such as no suggestions yet; a proposal's own hint is separate.
+    notice: str | None
 
 
 class PairCount(BaseModel):
@@ -269,7 +270,8 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
         Never writes anything. Proposals come in groups: confident, uncertain, unknown, and
         skipped (partly booked, never touched). Amounts are in cents. A credit card collection
         is split with propose_split, not booked as one line. A proposal's hint, when set, says
-        its IBAN may be a payment provider: show it with the proposal.
+        its IBAN may be a payment provider: show it with the proposal. The notice, when set, is
+        about the whole run.
         """
         if end_date < start_date:
             raise ToolError("end_date is before start_date")
@@ -278,10 +280,10 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
             transactions = await client.transactions(start_date, end_date)
             proposals = propose_all(transactions, suggestions, await state.labels())
         state.proposed = {t.id: t for t in transactions if not t.is_fully_reconciled}
-        hint = None
+        notice = None
         if not suggestions.entries and not suggestions.patterns:
-            hint = "There are no suggestions yet: run seed_suggestions first."
-        return ProposeResult(proposals=proposals, hint=hint)
+            notice = "There are no suggestions yet: run seed_suggestions first."
+        return ProposeResult(proposals=proposals, notice=notice)
 
     @mcp.tool(annotations=READ_ONLY)
     async def propose_split(statement_path: str) -> SplitProposal:
@@ -846,7 +848,7 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
             suggestions = load(state.suggestions_path)
             forgotten = suggestions.forget(booking_id)
             if already_gone and not forgotten:
-                raise HamuraiError(404, f"no booking {booking_id}, in Hamurai or learned")
+                raise ToolError(f"No booking {booking_id}, in Hamurai or learned.")
             if forgotten:
                 save(suggestions, state.suggestions_path)
         return UndoResult(booking_id=booking_id, forgotten=forgotten, already_gone=already_gone)

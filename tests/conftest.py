@@ -1,11 +1,15 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytest
 from fake_api import ADMINISTRATION_ID, JOURNAL_ID, FakeHamurai
+from mcp import Client
 from pydantic import SecretStr
 
 from hamurai.client import HamuraiClient
 from hamurai.config import Config
+from hamurai.server import build_server
 
 COOKIE = "session=SECRET-VALUE"
 
@@ -32,3 +36,14 @@ async def client(config: Config, fake: FakeHamurai) -> AsyncIterator[HamuraiClie
     client = HamuraiClient(config, transport=fake.transport())
     yield client
     await client.aclose()
+
+
+@asynccontextmanager
+async def connected(client: HamuraiClient, path: Path) -> AsyncGenerator[Client]:
+    """A session with the server, on the fake Hamurai and the suggestions at path."""
+    async with Client(build_server(client, path)) as session:
+        yield session
+
+
+def text(result) -> str:
+    return " ".join(getattr(c, "text", "") for c in result.content)

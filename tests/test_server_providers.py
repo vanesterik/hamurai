@@ -1,8 +1,8 @@
 from datetime import date
 
 import pytest
+from conftest import connected, text
 from fake_api import make_transaction
-from test_server_read import connected, text
 
 from hamurai.suggestions import Entry, LearnedBooking, Suggestions, load, save
 

@@ -1,14 +1,11 @@
 import logging
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
 
 import httpx
 import pytest
-from conftest import COOKIE
+from conftest import COOKIE, connected, text
 from fake_api import make_transaction
-from mcp import Client
 
-from hamurai.server import LOGGING_LEVEL, SESSION_EXPIRED, build_server
+from hamurai.server import LOGGING_LEVEL, SESSION_EXPIRED
 
 pytestmark = pytest.mark.anyio
 
@@ -19,16 +16,6 @@ OTHER_IBAN = "NL00TEST0000000002"
 @pytest.fixture
 def path(tmp_path):
     return tmp_path / "data" / "suggestions.yaml"
-
-
-@asynccontextmanager
-async def connected(client, path) -> AsyncGenerator[Client]:
-    async with Client(build_server(client, path)) as session:
-        yield session
-
-
-def text(result) -> str:
-    return " ".join(getattr(c, "text", "") for c in result.content)
 
 
 def booked_history(fake) -> None:
@@ -84,7 +71,7 @@ async def test_propose_bookings_groups_the_period(client, fake, path):
     assert proposals["confident"][0]["evidence"].startswith("IBAN match, booked 2 times as 4500")
     assert [p["transaction"]["id"] for p in proposals["uncertain"]] == [11]
     assert [p["transaction"]["id"] for p in proposals["unknown"]] == [12]
-    assert result.structured_content["hint"] is None
+    assert result.structured_content["notice"] is None
 
 
 async def test_propose_bookings_rejects_reversed_dates(client, path):
@@ -105,7 +92,7 @@ async def test_propose_bookings_hints_at_seeding_when_empty(client, fake, path):
             "propose_bookings", {"start_date": "2026-07-01", "end_date": "2026-09-30"}
         )
 
-    assert "seed_suggestions" in result.structured_content["hint"]
+    assert "seed_suggestions" in result.structured_content["notice"]
     assert len(result.structured_content["proposals"]["unknown"]) == 1
 
 
