@@ -176,6 +176,8 @@ A transaction on a listed IBAN is matched and learned by its counterparty name, 
 
 After adding an IBAN, ask Claude to relearn the payment providers. `relearn_providers` reads the history booked on the listed IBANs, removes the entries under them (which mix merchants), and learns each booking again under its merchant, the latest choice winning. It writes only `data/suggestions.yaml` and is safe to run again. In a fresh setup, seed first, then list the IBANs and relearn.
 
+Providers open new IBANs now and then. When a transaction arrives on a learned IBAN that isn't listed, under a name that looks like another party's (the entry was learned as "Spotify AB", the transaction is from "KLM"), its proposal carries a hint that the IBAN may be a payment provider. The proposal itself is unchanged. One counterparty spelled several ways ("AXUS NEDERLAND N.V.", "Axus Nederland BV") gets no hint, and neither does a name that only shares the provider's ("… by Adyen"). If the hint is right, list the IBAN and relearn; if not, ignore it.
+
 Comments in `data/suggestions.yaml` are lost whenever the tool saves it, so keep notes about which provider an IBAN is somewhere else.
 
 ### Refresh the session

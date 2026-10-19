@@ -254,7 +254,8 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
 
         Never writes anything. Proposals come in groups: confident, uncertain, unknown, and
         skipped (partly booked, never touched). Amounts are in cents. A credit card collection
-        is split with propose_split, not booked as one line.
+        is split with propose_split, not booked as one line. A proposal's hint, when set, says
+        its IBAN may be a payment provider: show it with the proposal.
         """
         if end_date < start_date:
             raise ToolError("end_date is before start_date")

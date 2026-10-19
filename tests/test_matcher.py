@@ -279,3 +279,79 @@ def test_a_pair_booked_again_after_another_counts_all_its_bookings():
         "(booked this way 3 times in all); "
         "before that 1 time as 4500 Kantoorkosten / 21% hoog"
     )
+
+
+def on_shared_iban(name: str) -> Suggestions:
+    """One entry learned under IBAN, booked three times."""
+    return Suggestions(entries=[entry(IBAN, name, (3, 10, "2026-01-01"))])
+
+
+def test_another_party_on_a_learned_iban_gets_the_provider_hint():
+    suggestions = on_shared_iban("Spotify AB")
+
+    proposal = propose(unbooked(iban=IBAN, name="KLM"), suggestions, LABELS)
+
+    assert proposal.hint == (
+        f"{IBAN} may be a payment provider: list it in provider_ibans and run relearn_providers."
+    )
+    assert (proposal.confidence, proposal.category_id) == (Confidence.CONFIDENT, 10)
+    assert proposal.evidence == (
+        "IBAN match, booked 3 times as 4500 Kantoorkosten / 21% hoog, last on 2026-01-03"
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "AXUS NEDERLAND N.V.",
+        "Axus Nederland B.V.-Axus Nederland BV",
+        "Axus Nederland BV",
+        "AXUS",
+    ],
+)
+def test_one_party_spelled_another_way_gets_no_hint(name):
+    suggestions = on_shared_iban("Axus Nederland B.V.")
+
+    assert propose(unbooked(iban=IBAN, name=name), suggestions, LABELS).hint is None
+
+
+@pytest.mark.parametrize(
+    ("learned", "arriving"), [("NRC MEDIA", "NRC"), ("Healthclub", "Helthclub")]
+)
+def test_close_names_get_no_hint(learned, arriving):
+    suggestions = on_shared_iban(learned)
+
+    assert propose(unbooked(iban=IBAN, name=arriving), suggestions, LABELS).hint is None
+
+
+def test_a_listed_provider_iban_gets_no_hint():
+    suggestions = on_shared_iban("Spotify AB")
+    suggestions.provider_ibans = [IBAN]
+
+    assert propose(unbooked(iban=IBAN, name="KLM"), suggestions, LABELS).hint is None
+
+
+@pytest.mark.parametrize("name", [None, "B.V."])
+def test_no_name_to_compare_gets_no_hint(name):
+    suggestions = on_shared_iban("Spotify AB")
+
+    assert propose(unbooked(iban=IBAN, name=name), suggestions, LABELS).hint is None
+
+
+def test_a_name_match_gets_no_hint():
+    suggestions = Suggestions(entries=[entry(None, "Spotify AB", (3, 10, "2026-01-01"))])
+
+    assert propose(unbooked(iban=IBAN, name="Spotify AB"), suggestions, LABELS).hint is None
+
+
+@pytest.mark.parametrize(
+    ("learned", "arriving"),
+    [
+        ("Dropbox by Adyen", "KLM by Adyen"),
+        ("Simon Levelt BV via Stichting Mollie Payments", "Eline Coene academy via Mollie"),
+    ],
+)
+def test_the_provider_named_after_by_or_via_is_not_the_party(learned, arriving):
+    suggestions = on_shared_iban(learned)
+
+    assert propose(unbooked(iban=IBAN, name=arriving), suggestions, LABELS).hint is not None

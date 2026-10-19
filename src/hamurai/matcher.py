@@ -1,7 +1,9 @@
 """Proposals for unbooked transactions, with their evidence. Pure logic, no I/O."""
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from enum import StrEnum
 
 from pydantic import BaseModel
@@ -36,6 +38,8 @@ class Proposal(BaseModel):
     category_id: int | None
     vat_code_id: int | None
     evidence: str
+    # Set when another party arrives on a learned IBAN; never changes the proposal itself.
+    hint: str | None = None
 
 
 class LineProposal(BaseModel):
@@ -77,6 +81,7 @@ def propose(transaction: Transaction, suggestions: Suggestions, labels: Labels) 
         category_id=choice.category_id,
         vat_code_id=choice.vat_code_id,
         evidence=choice.evidence,
+        hint=_provider_hint(transaction.counter_account, suggestions),
     )
 
 
@@ -124,6 +129,46 @@ def _match_counterparty(
     if (entry := suggestions.by_name(account.name_account_holder)) is not None:
         return _from_entry(entry, Confidence.UNCERTAIN, "Name match", labels)
     return _from_pattern(description, suggestions)
+
+
+# Legal forms: they say nothing about who the party is.
+LEGAL_FORMS = frozenset({"ab", "bv", "gmbh", "inc", "limited", "ltd", "nv", "sa", "sl"})
+# What follows these names the provider, not the party: "Dropbox by Adyen".
+PROVIDER_WORDS = frozenset({"by", "via"})
+# Below this similarity, two names with no word in common are taken as two parties.
+SIMILAR = 0.5
+
+
+def _provider_hint(account: CounterAccount, suggestions: Suggestions) -> str | None:
+    """A hint when the name on a learned, unlisted IBAN looks like another party's."""
+    if suggestions.is_provider(account.number):
+        return None
+    entry = suggestions.by_iban(account.number)
+    if entry is None or not _other_party(account.name_account_holder, entry.name):
+        return None
+    return (
+        f"{entry.iban} may be a payment provider: list it in provider_ibans and run "
+        "relearn_providers."
+    )
+
+
+def _other_party(name: str | None, learned: str | None) -> bool:
+    """No shared word of three letters or more, and little alike: one counterparty spelled
+    several ways (Axus Nederland B.V., AXUS NEDERLAND N.V.) is not two."""
+    words, learned_words = _words(name), _words(learned)
+    if not words or not learned_words:
+        return False
+    if any(len(word) >= 3 for word in set(words) & set(learned_words)):
+        return False
+    return SequenceMatcher(None, " ".join(words), " ".join(learned_words)).ratio() < SIMILAR
+
+
+def _words(name: str | None) -> list[str]:
+    """The words naming the party: up to "by" or "via", without legal forms."""
+    # Dots go first, so "B.V." becomes one word.
+    words = [w for w in re.split(r"[^\w]+", (name or "").replace(".", "").casefold()) if w]
+    cut = next((i for i, word in enumerate(words) if word in PROVIDER_WORDS), len(words))
+    return [word for word in words[:cut] if word not in LEGAL_FORMS]
 
 
 def _match_merchant(description: str, suggestions: Suggestions, labels: Labels) -> _Choice:
