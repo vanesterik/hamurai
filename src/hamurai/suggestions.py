@@ -6,6 +6,8 @@ learned. The latest-dated booking's category and VAT code is the entry's current
 
 import os
 import tempfile
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
@@ -177,6 +179,40 @@ class Suggestions(BaseModel):
         )
         return True
 
+    def relearn_providers(self, history: Sequence[tuple[Transaction, Booking]]) -> Relearned:
+        """Rebuild what was learned on the provider IBANs from their booked history, by
+        merchant; the latest choice wins. Gives the same result when run again."""
+        history = sorted(history, key=lambda row: row[0].entry_date)
+        relearned = {booking.id for _, booking in history}
+        removed = [e for e in self.entries if self.is_provider(e.iban)]
+        # Bookings in those entries that aren't in the history (a card line once learned into
+        # one by its name) stay with that name rather than being lost.
+        kept = [(e.name, b) for e in removed for b in e.bookings if b.id not in relearned]
+        self.entries = [e for e in self.entries if not self.is_provider(e.iban)]
+        # Taken back wherever they were learned before, so a second run counts nothing twice.
+        # Emptied entries stay until the end, so relearning finds them with their marks.
+        for entry in self.entries:
+            entry.bookings = [b for b in entry.bookings if b.id not in relearned]
+        touched: dict[int, Entry] = {}
+        learned = 0
+        for transaction, booking in history:
+            if self.record(transaction, booking):
+                learned += 1
+                entry = self.by_name(transaction.counter_account.name_account_holder)
+                if entry is not None:
+                    touched[id(entry)] = entry
+        for name, booking in kept:
+            entry = self.by_name(name)
+            if entry is None:
+                entry = Entry(name=name, bookings=[])
+                self.entries.append(entry)
+            entry.bookings.append(booking)
+            touched[id(entry)] = entry
+        self.entries = [e for e in self.entries if e.bookings]
+        return Relearned(
+            merchants=list(touched.values()), learned=learned, kept=len(kept), removed=len(removed)
+        )
+
     def forget(self, booking_id: int) -> bool:
         """Take back a learned booking. False when it was never learned."""
         for entry in self.entries:
@@ -187,6 +223,17 @@ class Suggestions(BaseModel):
                         self.entries.remove(entry)
                     return True
         return False
+
+
+@dataclass(frozen=True)
+class Relearned:
+    """What relearn_providers did: the merchants it touched, and how many bookings it learned
+    and kept, and entries it removed."""
+
+    merchants: list[Entry]
+    learned: int
+    kept: int
+    removed: int
 
 
 def load(path: Path = SUGGESTIONS_PATH) -> Suggestions:

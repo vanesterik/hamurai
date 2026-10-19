@@ -381,3 +381,115 @@ def test_a_hand_typed_iban_is_normalised_when_read(tmp_path):
     assert suggestions.record(tx(2, name=None), booking(2, 2))
     assert len(suggestions.entries) == 1
     assert len(suggestions.entries[0].bookings) == 2
+
+
+SHOP_A_DIRECT = "NL00TEST0000000005"
+
+
+def before_relearn() -> tuple[Suggestions, list[tuple[Transaction, Booking]]]:
+    """Shop A twice (10) and Shop B once (11) on the provider's IBAN, still learned as one
+    mixed entry under it, next to an unrelated entry."""
+    history = [
+        (on_provider(1, "Shop A", day=1), booking(101, 1, 10)),
+        (on_provider(2, "Shop B", day=2), booking(102, 2, 11)),
+        (on_provider(3, "Shop A", day=3), booking(103, 3, 10)),
+    ]
+    old = Entry(
+        iban=PROVIDER,
+        name="Shop A",
+        always_ask=True,
+        bookings=[
+            LearnedBooking(id=b.id, category_id=b.category_id, vat_code_id=20, date=t.entry_date)
+            for t, b in history
+        ],
+    )
+    other = Entry(
+        iban=IBAN,
+        name="Other",
+        bookings=[LearnedBooking(id=9, category_id=11, vat_code_id=20, date=date(2026, 6, 1))],
+    )
+    return Suggestions(entries=[old, other], provider_ibans=[PROVIDER]), history
+
+
+def test_relearn_splits_the_provider_entry_by_merchant():
+    suggestions, history = before_relearn()
+
+    result = suggestions.relearn_providers(history)
+
+    assert [e.name for e in suggestions.entries] == ["Other", "Shop A", "Shop B"]
+    shop_a = suggestions.by_name("Shop A")
+    assert shop_a is not None and shop_a.iban is None and not shop_a.always_ask
+    assert shop_a.counts == {Pair(category_id=10, vat_code_id=20): 2}
+    assert [e.name for e in result.merchants] == ["Shop A", "Shop B"]
+    assert (result.learned, result.kept, result.removed) == (3, 0, 1)
+
+
+def test_relearn_lets_the_latest_choice_win_and_shows_a_mixed_merchant():
+    suggestions, history = before_relearn()
+    history.append((on_provider(4, "Shop A", day=4), booking(104, 4, 11)))
+
+    result = suggestions.relearn_providers(history)
+
+    shop_a = suggestions.by_name("Shop A")
+    assert shop_a is not None and shop_a.current.category_id == 11
+    assert len(next(e for e in result.merchants if e.name == "Shop A").counts) == 2
+
+
+def test_relearn_keeps_a_later_direct_booking_current():
+    suggestions, history = before_relearn()
+    direct = LearnedBooking(id=50, category_id=11, vat_code_id=20, date=date(2026, 8, 1))
+    suggestions.entries.append(Entry(iban=SHOP_A_DIRECT, name="Shop A", bookings=[direct]))
+
+    suggestions.relearn_providers(history)
+
+    entry = suggestions.by_iban(SHOP_A_DIRECT)
+    assert entry is not None
+    assert entry.current.category_id == 11 and len(entry.bookings) == 3
+
+
+def test_relearn_twice_gives_the_same_suggestions():
+    suggestions, history = before_relearn()
+    suggestions.relearn_providers(history)
+    first = suggestions.model_dump()
+
+    result = suggestions.relearn_providers(history)
+
+    assert suggestions.model_dump() == first
+    assert (result.learned, result.removed) == (3, 0)
+
+
+def test_relearn_leaves_other_entries_alone():
+    suggestions, history = before_relearn()
+    other = suggestions.by_iban(IBAN)
+    assert other is not None
+    before = other.model_copy(deep=True)
+
+    suggestions.relearn_providers(history)
+
+    assert suggestions.by_iban(IBAN) == before
+
+
+def test_relearn_keeps_always_ask_set_between_runs():
+    suggestions, history = before_relearn()
+    suggestions.relearn_providers(history)
+    shop_a = suggestions.by_name("Shop A")
+    assert shop_a is not None
+    shop_a.always_ask = True
+
+    suggestions.relearn_providers(history)
+
+    shop_a = suggestions.by_name("Shop A")
+    assert shop_a is not None and shop_a.always_ask
+
+
+def test_relearn_keeps_a_booking_it_cannot_relearn_under_its_name():
+    # A card line once learned into the provider entry by its name: not in the history.
+    suggestions, history = before_relearn()
+    card_line = LearnedBooking(id=8888, category_id=11, vat_code_id=20, date=date(2026, 7, 20))
+    suggestions.entries[0].bookings.append(card_line)
+
+    result = suggestions.relearn_providers(history)
+
+    assert result.kept == 1
+    shop_a = suggestions.by_name("Shop A")
+    assert shop_a is not None and 8888 in [b.id for b in shop_a.bookings]

@@ -564,37 +564,9 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
             ]
             bookings = await client.bookings_for_many([t.id for t in on_provider])
             labels = await state.labels()
-        history = sorted(
-            ((t, b) for t in on_provider for b in bookings[t.id]), key=lambda row: row[0].entry_date
+        relearned = suggestions.relearn_providers(
+            [(t, b) for t in on_provider for b in bookings[t.id]]
         )
-        relearned = {booking.id for _, booking in history}
-        removed = [e for e in suggestions.entries if suggestions.is_provider(e.iban)]
-        # Bookings in those entries that aren't in the history (a card line once learned into
-        # one by its name) stay with that name rather than being lost.
-        kept = [(e.name, b) for e in removed for b in e.bookings if b.id not in relearned]
-        suggestions.entries = [
-            e for e in suggestions.entries if not suggestions.is_provider(e.iban)
-        ]
-        # Taken back wherever they were learned before, so a second run counts nothing twice.
-        # Emptied entries stay until the end, so relearning finds them with their marks.
-        for entry in suggestions.entries:
-            entry.bookings = [b for b in entry.bookings if b.id not in relearned]
-        touched: dict[int, Entry] = {}
-        learned = 0
-        for transaction, booking in history:
-            if suggestions.record(transaction, booking):
-                learned += 1
-                entry = suggestions.by_name(transaction.counter_account.name_account_holder)
-                if entry is not None:
-                    touched[id(entry)] = entry
-        for name, booking in kept:
-            entry = suggestions.by_name(name)
-            if entry is None:
-                entry = Entry(name=name, bookings=[])
-                suggestions.entries.append(entry)
-            entry.bookings.append(booking)
-            touched[id(entry)] = entry
-        suggestions.entries = [e for e in suggestions.entries if e.bookings]
         save(suggestions, state.suggestions_path)
         return RelearnSummary(
             merchants=[
@@ -606,11 +578,11 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
                     label=labels.pair(entry.current),
                     mixed=len(entry.counts) > 1,
                 )
-                for entry in touched.values()
+                for entry in relearned.merchants
             ],
-            bookings=learned,
-            kept_bookings=len(kept),
-            removed_entries=len(removed),
+            bookings=relearned.learned,
+            kept_bookings=relearned.kept,
+            removed_entries=relearned.removed,
         )
 
     @mcp.tool()
