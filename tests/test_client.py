@@ -307,6 +307,16 @@ async def test_files_reads_receipts(client, fake):
     assert "SECRET-FILE" not in file.model_dump_json()
 
 
+async def test_a_file_without_a_mime_type_is_still_read(client, fake):
+    without = make_file(1, created_at="2026-07-01T10:00:00")
+    del without["mimeType"]
+    fake.files += [without, make_file(2, created_at="2026-07-01T09:00:00")]
+
+    files = await client.files(date(2026, 1, 1))
+
+    assert [f.id for f in files] == [1, 2]
+
+
 async def test_files_pages_by_offset_until_the_date(client, fake):
     start = datetime(2026, 10, 1, 12, 0)
     fake.files += [

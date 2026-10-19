@@ -75,7 +75,6 @@ class File(_Model):
     id: int
     created_at: datetime
     name: str
-    mime_type: str
     # What Hamurai read from a receipt: a positive amount and the receipt's date.
     amount_cents: Annotated[int | None, BeforeValidator(_int_or_none)] = Field(
         default=None, validation_alias=AliasPath("metadata", "amountInCents")

@@ -87,11 +87,7 @@ class Entry(BaseModel):
 
     @property
     def last_seen(self) -> date:
-        return max(learned.date for learned in self.bookings)
-
-    def sort_bookings(self) -> None:
-        """Order the bookings by date, so the latest is the current choice."""
-        self.bookings.sort(key=lambda learned: learned.date)
+        return self.latest.date
 
     @property
     def counts(self) -> dict[Pair, int]:

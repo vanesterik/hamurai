@@ -98,7 +98,6 @@ async def test_relearn_keeps_a_later_direct_booking_current(client, fake, path):
 
     direct = load(path).by_iban(SHOP_A_DIRECT)
     assert direct is not None
-    assert [b.date for b in direct.bookings] == sorted(b.date for b in direct.bookings)
     assert direct.current.category_id == 11 and len(direct.bookings) == 3
 
 

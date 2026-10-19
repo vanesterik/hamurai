@@ -595,8 +595,6 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
             entry.bookings.append(booking)
             touched[id(entry)] = entry
         suggestions.entries = [e for e in suggestions.entries if e.bookings]
-        for entry in touched.values():
-            entry.sort_bookings()
         save(suggestions, state.suggestions_path)
         return RelearnSummary(
             merchants=[

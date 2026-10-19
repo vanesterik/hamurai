@@ -333,21 +333,6 @@ def test_old_provider_entry_never_answers_a_name_lookup():
     assert [(e.iban, len(e.bookings)) for e in suggestions.entries] == [(PROVIDER, 1), (None, 1)]
 
 
-def test_sort_bookings_makes_the_latest_current():
-    entry = Entry(
-        name="Shop A",
-        bookings=[
-            LearnedBooking(id=2, category_id=10, vat_code_id=20, date=date(2026, 5, 1)),
-            LearnedBooking(id=1, category_id=11, vat_code_id=20, date=date(2025, 5, 1)),
-        ],
-    )
-
-    entry.sort_bookings()
-
-    assert [b.id for b in entry.bookings] == [1, 2]
-    assert entry.current.category_id == 10
-
-
 def test_provider_ibans_are_normalised_when_read(tmp_path):
     path = tmp_path / "suggestions.yaml"
     path.write_text("provider_ibans:\n- nl00 prov 0000 0000 01\n- NL00PROV0000000001\n")
