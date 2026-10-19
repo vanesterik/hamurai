@@ -98,20 +98,9 @@ class HamuraiClient:
 
     async def attach_file(self, file_id: int, transaction_id: int) -> File:
         """Link a file, such as a receipt, to a bank transaction."""
-        # Never retried, like a booking.
-        try:
-            response = await self._http.post(
-                f"{self._prefix}/files/{file_id}/attach", json={"transactionId": transaction_id}
-            )
-        except httpx.ConnectError:
-            raise HamuraiError(0, "could not connect to Hamurai") from None
-        except httpx.TransportError:
-            raise BookingOutcomeUnknown() from None
-        _checked(response)
-        try:
-            return File.model_validate(response.json())
-        except ValueError:
-            raise BookingOutcomeUnknown() from None
+        return await self._post_once(
+            f"/files/{file_id}/attach", {"transactionId": transaction_id}, File.model_validate
+        )
 
     async def bookings_for(self, transaction_id: int) -> list[Booking]:
         """The bookings onto a category; others (e.g. onto an invoice) are left out."""
@@ -169,21 +158,7 @@ class HamuraiClient:
             "suggestion": None,
             "suggestionAccepted": False,
         }
-        # Never retried: after a timeout nobody knows whether the booking was made.
-        try:
-            response = await self._http.post(f"{self._prefix}/reconciliations", json=body)
-        except httpx.ConnectError:
-            raise HamuraiError(0, "could not connect to Hamurai") from None
-        except httpx.TransportError:
-            raise BookingOutcomeUnknown() from None
-        _checked(response)
-        try:
-            # The transaction ID comes from the request, whatever the answer says of it.
-            return Booking.model_validate(
-                {**response.json(), "transactionInfo": {"id": transaction_id}}
-            )
-        except ValueError:
-            raise BookingOutcomeUnknown() from None
+        return await self._post_once("/reconciliations", body, _booking_of(transaction_id))
 
     async def update_booking(
         self,
@@ -204,22 +179,9 @@ class HamuraiClient:
             "description": description,
             "entryDate": entry_date.isoformat(),
         }
-        # Never retried, like a create.
-        try:
-            response = await self._http.post(
-                f"{self._prefix}/reconciliations/{booking_id}", json=body
-            )
-        except httpx.ConnectError:
-            raise HamuraiError(0, "could not connect to Hamurai") from None
-        except httpx.TransportError:
-            raise BookingOutcomeUnknown() from None
-        _checked(response)
-        try:
-            return Booking.model_validate(
-                {**response.json(), "transactionInfo": {"id": transaction_id}}
-            )
-        except ValueError:
-            raise BookingOutcomeUnknown() from None
+        return await self._post_once(
+            f"/reconciliations/{booking_id}", body, _booking_of(transaction_id)
+        )
 
     async def delete_booking(self, booking_id: int) -> None:
         try:
@@ -228,12 +190,37 @@ class HamuraiClient:
             raise HamuraiError(0, "no answer from Hamurai") from None
         _checked(response)
 
+    async def _post_once[T](self, path: str, body: dict[str, Any], parse: Callable[[Any], T]) -> T:
+        """A request that changes something. Never retried: after a timeout nobody knows
+        whether it was done, so no answer, or one that can't be read, is an unknown outcome."""
+        try:
+            response = await self._http.post(self._prefix + path, json=body)
+        except httpx.ConnectError:
+            raise HamuraiError(0, "could not connect to Hamurai") from None
+        except httpx.TransportError:
+            raise BookingOutcomeUnknown() from None
+        _checked(response)
+        try:
+            return parse(response.json())
+        except ValueError:
+            raise BookingOutcomeUnknown() from None
+
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
         try:
             response = await self._http.get(self._prefix + path, params=params)
         except httpx.TransportError:
             response = await self._http.get(self._prefix + path, params=params)
         return _checked(response).json()
+
+
+def _booking_of(transaction_id: int) -> Callable[[Any], Booking]:
+    """Read a booking answer. The transaction ID comes from the request, whatever the answer
+    says of it."""
+
+    def parse(answer: Any) -> Booking:  # noqa: ANN401
+        return Booking.model_validate({**answer, "transactionInfo": {"id": transaction_id}})
+
+    return parse
 
 
 def _checked(response: httpx.Response) -> httpx.Response:

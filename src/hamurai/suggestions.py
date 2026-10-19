@@ -6,6 +6,7 @@ learned. The latest-dated booking's category and VAT code is the entry's current
 
 import os
 import tempfile
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -93,10 +94,7 @@ class Entry(BaseModel):
 
     @property
     def counts(self) -> dict[Pair, int]:
-        counts: dict[Pair, int] = {}
-        for learned in self.bookings:
-            counts[learned.pair] = counts.get(learned.pair, 0) + 1
-        return counts
+        return dict(Counter(learned.pair for learned in self.bookings))
 
 
 class Pattern(BaseModel):

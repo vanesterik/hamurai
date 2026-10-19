@@ -3,7 +3,8 @@
 import logging
 import re
 import sys
-from collections.abc import Generator
+from collections import Counter
+from collections.abc import Generator, Iterable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -190,12 +191,25 @@ def tool_errors() -> Generator[None]:
         yield
     except SessionExpired:
         raise ToolError(SESSION_EXPIRED) from None
-    except HamuraiError as exc:
-        raise ToolError(str(exc)) from None
-    except SuggestionsFileError as exc:
+    except (HamuraiError, SuggestionsFileError) as exc:
         raise ToolError(str(exc)) from None
     except httpx.TransportError:
         raise ToolError("Could not reach Hamurai. Check the connection and try again.") from None
+
+
+def _repeated(ids: Iterable[int]) -> list[int]:
+    """The IDs listed more than once, in order."""
+    return sorted(i for i, n in Counter(ids).items() if n > 1)
+
+
+def _refuse_unknown(labels: Labels, lines: Sequence[BookingLine | SplitLine]) -> None:
+    """Refuse lines whose category or VAT code Hamurai doesn't have."""
+    unknown = sorted(
+        {line.category_id for line in lines if line.category_id not in labels.categories}
+        | {line.vat_code_id for line in lines if line.vat_code_id not in labels.vat_codes}
+    )
+    if unknown:
+        raise ToolError(f"Unknown category or VAT code IDs: {unknown}")
 
 
 def statement_file(text: str) -> Path:
@@ -353,7 +367,7 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
         if not links:
             raise ToolError("No receipts to link.")
         ids = [link.file_id for link in links]
-        repeated = sorted({i for i in ids if ids.count(i) > 1})
+        repeated = _repeated(ids)
         if repeated:
             raise ToolError(f"Receipts listed more than once: {repeated}")
         if state.receipts is None:
@@ -380,11 +394,9 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
         proposed_targets = [p.target for p in state.receipts.confident] + [
             t for group in state.receipts.ambiguous for t in group.targets
         ]
-        room: dict[int, int] = {}
-        for target in proposed_targets:
-            room[target.transaction_id] = room.get(target.transaction_id, 0) + 1
-        asked = [link.transaction_id for link in links]
-        crowded = sorted({t for t in asked if asked.count(t) > room.get(t, 0)})
+        room = Counter(target.transaction_id for target in proposed_targets)
+        asked = Counter(link.transaction_id for link in links)
+        crowded = sorted(t for t, n in asked.items() if n > room[t])
         if crowded:
             raise ToolError(f"More receipts than expenses for transactions {crowded}.")
         busy = sorted(i for i in ids if i in state.linking)
@@ -596,7 +608,7 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
         if not bookings:
             raise ToolError("No lines to book.")
         ids = [b.transaction_id for b in bookings]
-        duplicates = sorted({i for i in ids if ids.count(i) > 1})
+        duplicates = _repeated(ids)
         if duplicates:
             raise ToolError(f"Transactions listed more than once: {duplicates}")
         unproposed = [i for i in ids if i not in state.proposed]
@@ -605,13 +617,7 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
                 f"Not in the latest proposals: {unproposed}. Run propose_bookings first."
             )
         with tool_errors():
-            labels = await state.labels()
-            unknown = sorted(
-                {b.category_id for b in bookings if b.category_id not in labels.categories}
-                | {b.vat_code_id for b in bookings if b.vat_code_id not in labels.vat_codes}
-            )
-            if unknown:
-                raise ToolError(f"Unknown category or VAT code IDs: {unknown}")
+            _refuse_unknown(await state.labels(), bookings)
             suggestions = load(state.suggestions_path)
             dates = [state.proposed[i].entry_date for i in ids]
             # Fetched again just before booking, so nothing gets booked twice.
@@ -697,7 +703,7 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
         collection, statement = state.split
         numbers = [line.line for line in lines]
         expected = [line.number for line in statement.lines]
-        repeated = sorted({n for n in numbers if numbers.count(n) > 1})
+        repeated = _repeated(numbers)
         missing = sorted(set(expected) - set(numbers))
         unknown_lines = sorted(set(numbers) - set(expected))
         if repeated or missing or unknown_lines:
@@ -728,13 +734,7 @@ def build_server(client: HamuraiClient, suggestions_path: Path = SUGGESTIONS_PAT
     ) -> SplitResult:
         transaction_id = collection.id
         with tool_errors():
-            labels = await state.labels()
-            unknown = sorted(
-                {b.category_id for b in lines if b.category_id not in labels.categories}
-                | {b.vat_code_id for b in lines if b.vat_code_id not in labels.vat_codes}
-            )
-            if unknown:
-                raise ToolError(f"Unknown category or VAT code IDs: {unknown}")
+            _refuse_unknown(await state.labels(), lines)
             suggestions = load(state.suggestions_path)
             # Fetched again just before booking, so nothing gets booked twice.
             latest = {
