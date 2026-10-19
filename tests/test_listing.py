@@ -152,7 +152,8 @@ def test_ten_per_group_by_default_and_none_for_all():
 
     assert len(list_suggestions(many, LABELS).groups[0].entries) == 10
     assert list_suggestions(many, LABELS).groups[0].more == 2
-    assert len(list_suggestions(many, LABELS, limit=None).groups[0].entries) == 12
+    everything = list_suggestions(many, LABELS, limit=None).groups[0]
+    assert (len(everything.entries), everything.more) == (12, 0)
 
 
 def test_limit_below_one_is_refused():

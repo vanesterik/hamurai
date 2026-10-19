@@ -85,11 +85,7 @@ def list_suggestions(
     # The busiest counterparty first, then by name.
     for listed in grouped.values():
         listed.sort(key=_busiest_first)
-    groups = [
-        Group(title=title, entries=grouped[title][:limit], more=len(grouped[title][limit:]))
-        for title in order
-        if title in grouped
-    ]
+    groups = [_group(title, grouped[title], limit) for title in order if title in grouped]
     patterns = [
         ListedPattern(
             contains=p.contains,
@@ -108,6 +104,12 @@ def list_suggestions(
         provider_ibans=suggestions.provider_ibans,
         entries=len(entries),
     )
+
+
+def _group(title: str, listed: list[ListedEntry], limit: int | None) -> Group:
+    shown = listed[:limit]
+    # What the limit leaves out: none when there is no limit.
+    return Group(title=title, entries=shown, more=len(listed) - len(shown))
 
 
 def _titles(labels: Labels) -> dict[str, Callable[[Entry], str]]:
