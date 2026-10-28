@@ -1,7 +1,7 @@
 [project]
 name = "hamurai"
 version = "0.1.0"
-description = "An MCP server that books Hamurai bank transactions with Claude Code."
+description = "An MCP server with which the agent books bank transactions in Hamurai."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
