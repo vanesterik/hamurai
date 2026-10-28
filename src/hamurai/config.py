@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from pydantic import SecretStr, ValidationError, field_validator
+from pydantic import HttpUrl, SecretStr, ValidationError, field_validator
 from pydantic_core import PydanticCustomError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -21,6 +21,9 @@ class Config(BaseSettings):
     cookie: SecretStr
     administration_id: int
     journal_id: int
+    base_url: HttpUrl
+    # The web app's own header, as `name: value`. Bookings are refused without it.
+    app_header: SecretStr
 
     @field_validator("cookie")
     @classmethod
@@ -32,6 +35,28 @@ class Config(BaseSettings):
         if not separator or not name.strip():
             raise PydanticCustomError("cookie_format", "expected name=value")
         return cookie
+
+    @field_validator("base_url")
+    @classmethod
+    def _base_url_is_an_https_host(cls, base_url: HttpUrl) -> HttpUrl:
+        # The client puts `/api/v2/...` after it: a path would be doubled or prefixed, and
+        # http would send the cookie in the clear.
+        if base_url.scheme != "https" or base_url.path not in (None, "", "/"):
+            raise PydanticCustomError("base_url_format", "expected https://<host>")
+        return base_url
+
+    @field_validator("app_header")
+    @classmethod
+    def _app_header_has_name_and_value(cls, app_header: SecretStr) -> SecretStr:
+        name, separator, value = app_header.get_secret_value().partition(":")
+        if not separator or not name.strip() or not value.strip():
+            raise PydanticCustomError("app_header_format", "expected name: value")
+        return app_header
+
+    def app_header_pair(self) -> tuple[str, str]:
+        """The app header's name and value, split on the first colon."""
+        name, _, value = self.app_header.get_secret_value().partition(":")
+        return name.strip(), value.strip()
 
 
 def load_config(env_file: Path | None = ROOT / ".env") -> Config:

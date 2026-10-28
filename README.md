@@ -8,7 +8,9 @@ The design is in `docs/specs/2026-10-17-hamurai-booking-mcp-design.md`, the impl
 
 1. `uv sync`
 2. Copy `.env.example` to `.env` and fill it in:
-   - `HAMURAI_COOKIE`: paste the value of Hamurai's `Authorization` cookie after the `Authorization=` that is already there. In the browser, open Hamurai, then DevTools → Application → Cookies → `app.hamurai.example`, and copy the value of `Authorization`.
+   - `HAMURAI_BASE_URL`: the web app's address, the host of its `/api/v2/...` requests in DevTools → Network, as `https://<host>`.
+   - `HAMURAI_APP_HEADER`: the web app's own header, sent with each of those requests, as `name: value`. Bookings are refused without it.
+   - `HAMURAI_COOKIE`: paste the value of Hamurai's `Authorization` cookie after the `Authorization=` that is already there. In the browser, open Hamurai, then DevTools → Application → Cookies → the host in `HAMURAI_BASE_URL`, and copy the value of `Authorization`.
    - `HAMURAI_ADMINISTRATION_ID` and `HAMURAI_JOURNAL_ID`: in DevTools → Network, open any `/api/v2/...` request. Its URL holds both numbers: `/administrations/<administration id>/...?journalId=<journal id>`.
 3. Start Claude Code in this directory. It picks up the `hamurai` server from `.mcp.json`; `/mcp` shows whether it is connected.
 

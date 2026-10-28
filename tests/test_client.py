@@ -211,7 +211,7 @@ async def test_null_description_and_counter_account(client, fake):
 
 
 @pytest.mark.parametrize("call", ["read", "write"])
-async def test_requests_carry_the_web_app_headers(client, fake, call):
+async def test_requests_send_the_configured_app_header(client, fake, call):
     fake.transactions.append(make_transaction(1, iban="NL00TEST0000000001", name="One"))
 
     if call == "read":
@@ -220,8 +220,16 @@ async def test_requests_carry_the_web_app_headers(client, fake, call):
         await client.create_booking(1, 10, 20)
 
     headers = fake.requests[-1].headers
-    assert headers["x-hamurai"] == "HAMURAI"
+    assert headers["x-test-app"] == "TEST"
     assert headers["device-type"] == "DESKTOP"
+
+
+async def test_requests_go_to_the_configured_base_url(client, fake):
+    await client.vat_codes()
+
+    url = fake.requests[-1].url
+    assert url.host == "hamurai.test"
+    assert url.path == "/api/v2/administrations/11111/vat-codes"
 
 
 async def test_update_booking_sends_the_recorded_body(client, fake):

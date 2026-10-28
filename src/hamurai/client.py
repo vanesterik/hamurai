@@ -15,15 +15,15 @@ from pydantic import ValidationError
 from hamurai.config import Config
 from hamurai.models import Booking, Category, File, Transaction, VatCode
 
-BASE_URL = "https://app.hamurai.example"
 PAGE_SIZE = 500
 # The files list comes 100 at a time, whatever is asked for.
 FILE_PAGE = 100
 MAX_FILE_PAGES = 1000
 
-# Sent by Hamurai's web app on every request. Reads work without them, but bookings
-# are refused without them: "You have no access to this action." (verified live).
-WEB_APP_HEADERS = {"x-hamurai": "HAMURAI", "device-type": "DESKTOP"}
+# Sent by Hamurai's web app on every request, along with the app header from the
+# configuration. Reads work without it, but bookings are refused without it:
+# "You have no access to this action." (verified live).
+DEVICE_HEADERS = {"device-type": "DESKTOP"}
 
 
 class SessionExpired(Exception):
@@ -45,12 +45,14 @@ class HamuraiClient:
     def __init__(self, config: Config, transport: httpx.AsyncBaseTransport | None = None) -> None:
         self._prefix = f"/api/v2/administrations/{config.administration_id}"
         self._journal_id = config.journal_id
+        app_header_name, app_header_value = config.app_header_pair()
         self._http = httpx.AsyncClient(
-            base_url=BASE_URL,
+            base_url=str(config.base_url),
             headers={
                 "Cookie": config.cookie.get_secret_value(),
                 "Accept": "application/json",
-                **WEB_APP_HEADERS,
+                app_header_name: app_header_value,
+                **DEVICE_HEADERS,
             },
             timeout=30.0,
             transport=transport,

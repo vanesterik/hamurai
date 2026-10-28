@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fake_api import ADMINISTRATION_ID, JOURNAL_ID, FakeHamurai
 from mcp import Client
-from pydantic import SecretStr
+from pydantic import HttpUrl, SecretStr
 
 from hamurai.client import HamuraiClient
 from hamurai.config import Config
@@ -22,7 +22,11 @@ def anyio_backend() -> str:
 @pytest.fixture
 def config() -> Config:
     return Config.model_construct(
-        cookie=SecretStr(COOKIE), administration_id=ADMINISTRATION_ID, journal_id=JOURNAL_ID
+        cookie=SecretStr(COOKIE),
+        administration_id=ADMINISTRATION_ID,
+        journal_id=JOURNAL_ID,
+        base_url=HttpUrl("https://hamurai.test"),
+        app_header=SecretStr("x-test-app: TEST"),
     )
 
 
