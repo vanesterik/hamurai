@@ -1,6 +1,6 @@
 # Hamurai
 
-An MCP server that books Hamurai bank transactions with Claude Code. It proposes a category and VAT code for each unbooked transaction, from how the same counterparty was booked before, and books only what you approve.
+An MCP server with which the agent, Claude Code, books bank transactions in Hamurai. It proposes a category and VAT code for each unbooked transaction, from how the same counterparty was booked before, and the agent books only what you approve.
 
 The design is in `docs/specs/2026-10-17-hamurai-booking-mcp-design.md`, the implementation plan in `docs/plans/2026-10-17-bank-bookings.md`.
 
