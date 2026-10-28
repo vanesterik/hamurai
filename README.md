@@ -1,22 +1,74 @@
+<p align="center"><img src="./hamurai.png" alt="Hamurai" height="600"></p>
+
 # Hamurai
 
-An MCP server with which the agent, Claude Code, books bank transactions in Hamurai. It proposes a category and VAT code for each unbooked transaction, from how the same counterparty was booked before, and the agent books only what you approve.
+**Hamurai** is a fictional online accounting application, of the kind a freelancer uses to keep their books: the business bank account's transactions come in automatically, and each one has to be booked onto a category (the ledger account) with a VAT code. Receipts are uploaded to it and linked to the expenses they prove. The VAT return is built from those bookings, so every quarter each transaction has to be booked.
 
-The design is in `docs/specs/2026-10-17-hamurai-booking-mcp-design.md`, the implementation plan in `docs/plans/2026-10-17-bank-bookings.md`.
+This project is an [MCP](https://modelcontextprotocol.io) server that does that bookkeeping in Hamurai through its web app's API. It gives an AI agent the tools to:
+- propose a category and VAT code for each unbooked transaction, from how the same counterparty was booked before;
+- split a credit card collection into its purchases;
+- link uploaded receipts to their expenses.
 
-## Setup
+[Claude Code](https://claude.com/claude-code) is the agent and the interface. The agent books only what you approve, and learns from each booking.
 
-1. `uv sync`
-2. Copy `.env.example` to `.env` and fill it in:
-   - `HAMURAI_BASE_URL`: the web app's address, the host of its `/api/v2/...` requests in DevTools → Network, as `https://<host>`.
-   - `HAMURAI_APP_HEADER`: the web app's own header, sent with each of those requests, as `name: value`. Bookings are refused without it.
-   - `HAMURAI_COOKIE`: paste the value of Hamurai's `Authorization` cookie after the `Authorization=` that is already there. In the browser, open Hamurai, then DevTools → Application → Cookies → the host in `HAMURAI_BASE_URL`, and copy the value of `Authorization`.
-   - `HAMURAI_ADMINISTRATION_ID` and `HAMURAI_JOURNAL_ID`: in DevTools → Network, open any `/api/v2/...` request. Its URL holds both numbers: `/administrations/<administration id>/...?journalId=<journal id>`.
-3. Start Claude Code in this directory. It picks up the `hamurai` server from `.mcp.json`; `/mcp` shows whether it is connected.
+## Motivation
+
+The motivation for this project is twofold:
+1. To take the quarterly chore of booking every bank transaction, card purchase and receipt off my hands, while keeping the final say over each booking.
+2. To show how I work with Claude Code: every piece of work starts as a design and a plan, and lands as one reviewable commit per task.
+
+## Name
+
+The name **Hamurai**, for both the accounting application and this project, is a nod to Hamurai, the samurai dressed in ham, one of the parasites that pose as old friends in the episode "Total Rickall" of the [Rick and Morty](https://www.imdb.com/title/tt2861424/) series.
+
+## Installation
+
+The project's commands run through [Task](https://taskfile.dev) and [uv](https://docs.astral.sh/uv/), on Python 3.14 (pinned in `.python-version`; uv installs it if needed). With both installed, install the project and its git hooks with:
+
+```bash
+task setup
+```
+
+Then copy `.env.example` to `.env` and fill it in:
+
+- `HAMURAI_BASE_URL`: the web app's address, the host of its `/api/v2/...` requests in DevTools → Network, as `https://<host>`.
+- `HAMURAI_APP_HEADER`: the web app's own header, sent with each of those requests, as `name: value`. Bookings are refused without it.
+- `HAMURAI_COOKIE`: paste the value of Hamurai's `Authorization` cookie after the `Authorization=` that is already there. In the browser, open Hamurai, then DevTools → Application → Cookies → the host in `HAMURAI_BASE_URL`, and copy the value of `Authorization`.
+- `HAMURAI_ADMINISTRATION_ID` and `HAMURAI_JOURNAL_ID`: in DevTools → Network, open any `/api/v2/...` request. Its URL holds both numbers: `/administrations/<administration id>/...?journalId=<journal id>`.
 
 `.env` and `data/` are git-ignored: the cookie and the learned bookings never go into the repository.
 
-## The tools
+`task check` runs every check: lint, type check and tests. `task --list` shows the rest (`format`, `lint`, `typecheck`, `test`, `pre-commit`). The git hooks run the same checks: pre-commit over the staged files, pre-push the whole of `task check`. CI runs `task check` on every pull request and every push to `main`, except for changes to Markdown and `docs/` only. No test talks to Hamurai: they run against an in-memory fake with invented data, so CI needs no secrets.
+
+## How booking a quarter works
+
+The agent proposes, you decide, and the server books. Claude Code asks your permission for every `book` call, and every booking you approve is learned for next time.
+
+```mermaid
+sequenceDiagram
+    actor You
+    participant Agent as Claude Code (the agent)
+    participant Server as hamurai MCP server
+    participant File as data/suggestions.yaml
+    participant Hamurai
+
+    You->>Agent: Book Q3 2026.
+    Agent->>Server: propose_bookings(start_date, end_date)
+    Server->>Hamurai: unbooked transactions in the period
+    Server->>File: read the learned bookings
+    Server-->>Agent: confident, uncertain, unknown and skipped proposals
+    Agent-->>You: the confident proposals as one table, the rest one at a time
+    You->>Agent: approve, strike or correct lines
+    Agent->>Server: book(bookings)
+    Note over You,Agent: Claude Code asks your permission for the call
+    Server->>Hamurai: create each booking
+    Server->>File: learn each booked line
+    Server-->>Agent: booked, failed, unknown or not_tried per line
+```
+
+## Usage
+
+Start Claude Code in this directory. It picks up the `hamurai` server from `.mcp.json`, and the agent gets these tools:
 
 | Tool | Writes to | What it does |
 |---|---|---|
@@ -35,89 +87,57 @@ The design is in `docs/specs/2026-10-17-hamurai-booking-mcp-design.md`, the impl
 
 Amounts in tool output are in cents: `-1299` is € −12,99.
 
-## How to
-
 You talk to Claude in plain words; it picks the tools. The prompts below are examples, not commands.
-
-### Check the code
-
-```bash
-task setup   # once: install from the lockfile and the git hooks
-task check   # lint, type check and tests
-```
-
-`task --list` shows the rest (`format`, `lint`, `typecheck`, `test`, `pre-commit`). The git hooks run the same checks: pre-commit over the staged files, pre-push the whole of `task check`. CI runs `task check` on every pull request and every push to `main`, except for changes to Markdown and `docs/` only.
-
-No test talks to Hamurai: they run against an in-memory fake with invented data, so CI needs no secrets.
 
 ### Connect
 
-Run `/mcp` in Claude Code. `hamurai` should show as connected with thirteen tools. If it failed to start, run `uv run hamurai` in a terminal: it prints the reason and exits (a missing or empty variable in `.env` is named, never shown). If it starts, it waits for Claude Code; stop it with Ctrl-C.
+Run `/mcp` in Claude Code: `hamurai` should show as connected. If it isn't, run `uv run hamurai` in a terminal to see why (a missing variable is named, never shown).
 
-After changing `.env` or the code, reconnect the server from `/mcp`: it reads `.env` only when it starts.
+Reconnect from `/mcp` after changing `.env` or the code.
 
 ### Seed the suggestions, once
 
 > Seed the suggestions from the booking history.
 
-`seed_suggestions` takes a few minutes: one request per booked transaction. Its summary gives:
+This takes a few minutes. The summary lists the `flagged` counterparties: those booked under more than one category or VAT code. For each, tell Claude either:
 
-- how many counterparties and bookings it found;
-- `skipped_split`: transactions split over several bookings, left out;
-- `skipped_other`: transactions booked onto something other than a category, such as an invoice, left out;
-- `flagged`: counterparties booked under more than one category or VAT code, each with how often each one was used and when it was last used.
-
-For each flagged counterparty, tell Claude one of two things:
-
-- **One category and VAT code** from its history. From then on it is proposed as `confident`.
-- **Always ask**, for a counterparty with no single right category, such as your own account, the tax office or a payment-request service. It keeps its whole history and is always proposed as `uncertain`, one at a time, never in the confident table.
+- **one category and VAT code**, proposed as `confident` from then on, or
+- **always ask**, for a counterparty with no single right category (your own account, the tax office). It is always proposed as `uncertain`.
 
 > Take the one used most each time, but the current VAT rate where it changed. Always ask for my own account, the Belastingdienst and Tikkie.
 
-`save_suggestions` then writes `data/suggestions.yaml`. Open it: one entry per counterparty, one line per learned booking. It is meant to stay readable and can be edited by hand.
+`save_suggestions` then writes `data/suggestions.yaml`, which stays readable and can be edited by hand.
 
-Seed before booking anything. Booking first creates the file, and `save_suggestions` never overwrites it: to seed after all, delete `data/suggestions.yaml` (losing anything learned or written in it by hand) and seed again.
+Seed before booking anything: `save_suggestions` never overwrites an existing file.
 
 ### Book a quarter
 
 > Book Q3 2026.
 
-Claude calls `propose_bookings` for 1 July to 30 September and shows the confident proposals as one table. Approve it, or name the lines to strike. Then it goes through the uncertain and unknown ones one at a time: for an unknown one it proposes a category itself, from Hamurai's list, and you approve or correct it.
+Claude shows the confident proposals as one table to approve, then the uncertain and unknown ones one at a time.
 
-Claude Code asks your permission for every `book` call. That prompt is your hard stop: check the lines in it before you allow it, and don't choose "always allow" for `book`.
-
-`book` reports each line:
+Claude Code asks your permission for every `book` call. That prompt is your hard stop: check it, and never choose "always allow" for `book`.
 
 | Status | Meaning |
 |---|---|
-| `booked` | Booked, with its booking ID. Learned, unless the reason says otherwise. |
-| `failed` | Not booked: Hamurai refused it, or it was already booked in the meantime. |
-| `unknown` | No answer from Hamurai: it may or may not be booked. Ask for the proposals again; a booked one no longer appears. Never booked twice. |
-| `not_tried` | The session expired partway; these lines were not sent. |
+| `booked` | Booked and learned. |
+| `failed` | Refused, or already booked in the meantime. |
+| `unknown` | No answer: ask for the proposals again. It is never booked twice. |
+| `not_tried` | The session expired before this line was sent. |
 
-Every booking you approve is learned. When you book a counterparty differently than before, the latest choice wins: next quarter proposes the new one, and the evidence says what it was before.
+When you book a counterparty differently than before, the latest choice wins.
 
 ### Split a credit card collection
 
-The card company collects each month's purchases as one bank transaction. Download that month's statement as CSV from the bank that issues the card, drag the file into the Claude Code prompt (it pastes the path), and ask:
+Download the month's card statement as CSV, drag it into the Claude Code prompt, and ask:
 
 > Split the card collection from this statement: ~/Desktop/statement.csv
 
-`propose_split` reads the file itself, so the card number, account number and name on the card never show up in the conversation. It leaves out three kinds of rows and lists them:
+The card's identifying details never show up in the conversation. The payment row, refunded purchases and zero rows are left out and listed. The lines must add up to one unbooked bank transaction, or nothing is booked.
 
-- the payment row (`BETALING ONTVANGEN - DANK U`): the previous collection arriving on the card account;
-- a purchase that was refunded for the same amount, together with its refund;
-- a row of 0,00, such as a waived fee: there is nothing to book.
+For a merchant it hasn't seen, Claude picks the VAT code by location: "Geen / Vrijgesteld" outside the EU, 21% inside. Every line is booked, so correct a line rather than strike it.
 
-A credit with no purchase of the same amount in the file, such as a refund for something on an earlier statement, is a line of its own with a positive amount: it lowers its category's costs, and it is booked after the purchases.
-
-The lines must add up to one unbooked bank transaction dated from the statement's first booking date to 45 days after its last one. If none matches, or more than one does, it refuses and nothing is booked.
-
-Claude shows the confident lines as one table and the rest one at a time, as when booking a quarter. For a merchant it hasn't seen, it proposes a category and picks the VAT code by where the merchant is: "Geen / Vrijgesteld" outside the EU, 21% inside it. Every line is booked, so correct a line rather than strike it.
-
-`book_split` books each line onto the collection with the merchant's description and the collection's date. If anything fails partway, it deletes every booking it made, so the collection is either split completely or not at all. If a delete fails too, its report lists the booking IDs left behind. Once the whole split is booked, each merchant is learned, and next month's statement proposes it as `confident`.
-
-To undo a split, undo each of its bookings (the IDs are in `book_split`'s report).
+`book_split` books all lines or none. To undo a split, undo each of its bookings.
 
 ### Link receipts
 
@@ -125,20 +145,15 @@ Upload receipts with the Hamurai app as usual, then ask:
 
 > Link the receipts for Q3 2026.
 
-`propose_receipts` matches each unlinked receipt to an expense in the period, booked or not. It matches by the amount and date Hamurai read from the receipt, because Hamurai keeps no supplier:
+Receipts are matched to expenses by amount and date: a bank transaction from 30 days before to 3 days after, a card purchase up to 45 days before its collection. Confident pairs come as one table, `ambiguous` ones for you to pick from. Receipts without a readable amount, which is most PDFs, are only counted.
 
-- **A bank transaction** without files matches a receipt of the same amount dated from 30 days before it to 3 days after.
-- **Each line of a split**, such as a card collection, matches a receipt of the line's amount dated up to 45 days before the collection. The receipt is linked to the collection, which can hold several.
-
-Only a pair nothing else could fit is `confident`: Claude shows those as one table. When a receipt fits more than one expense, or an expense more than one receipt, they come as an `ambiguous` group, and you pick one pair or none. Receipts Hamurai read no amount from, which is most PDFs, are only counted.
-
-`link_receipts` links what you approve, after checking each receipt is still unlinked. A wrong link is undone in the web app: the tool can't unlink yet.
+To undo a wrong link, use the web app.
 
 ### Undo a booking
 
 > Undo the booking for the parking garage.
 
-`undo_booking` takes a booking ID (from `book`'s report), deletes that booking in Hamurai and takes back what it taught. If the booking was already deleted in the web app, it still takes it back. It deletes whatever booking ID it gets, including ones made by hand in the web app, so check the ID in the permission prompt.
+`undo_booking` deletes the booking and takes back what it taught. It deletes any booking ID it gets, so check the ID in the permission prompt.
 
 ### Look through the suggestions
 
@@ -146,42 +161,41 @@ Only a pair nothing else could fit is `confident`: Claude shows those as one tab
 >
 > What do you know about Spotify?
 
-`list_suggestions` lists every learned counterparty once, under the category and VAT code it would be proposed with, with its number of bookings, when it was last seen, and whether it is *always ask*. A counterparty booked more than one way also shows its other pairs. Three perspectives:
-
-- `category` (the default): by category and VAT code;
-- `vat`: by VAT code alone, to check rates across categories;
-- `match`: by how a counterparty is matched: *always ask*, *by IBAN* (proposed as confident), or *by name* (card merchants, payment-provider merchants, counterparties without an IBAN).
-
-Each group shows its ten busiest counterparties and says how many more there are; ask for more, or for all of them, when you want the rest (all of them at once can be too long for one answer). A text narrows it to names or IBANs containing it, a category to that category. The patterns and provider IBANs are listed apart. It writes nothing: to change a suggestion, book the next payment differently, or edit `data/suggestions.yaml`.
+`list_suggestions` groups what has been learned by `category` (the default), `vat` or `match` (always ask, by IBAN, by name), ten per group. Ask for more when you want the rest. It writes nothing: to change a suggestion, book differently or edit `data/suggestions.yaml`.
 
 ### Add a description pattern
 
-For transactions with neither an IBAN nor a name, such as bank fees, add a pattern to `data/suggestions.yaml` by hand. A description containing the text (case doesn't matter) gets that category and VAT code, as an `uncertain` proposal:
+For transactions with neither an IBAN nor a name, such as bank fees, add a pattern to `data/suggestions.yaml`:
 
 ```yaml
 patterns:
 - {contains: bankkosten, category_id: 123, vat_code_id: 45}
 ```
 
-Ask Claude to list the categories and VAT codes to find the IDs. No reconnect is needed: the file is read on every call.
+A matching description is proposed as `uncertain`. Ask Claude to list the categories and VAT codes for the IDs.
 
 ### Payment providers
 
-Payment providers such as Adyen, Mollie and Buckaroo collect for many merchants under one IBAN, so matching by IBAN would propose one merchant's category for another. List their IBANs in `data/suggestions.yaml` by hand:
+Providers such as Adyen and Mollie collect for many merchants under one IBAN. List those IBANs in `data/suggestions.yaml`, so their transactions are matched by merchant name instead:
 
 ```yaml
 provider_ibans:
 - NL00PROV0000000001
 ```
 
-A transaction on a listed IBAN is matched and learned by its counterparty name, which is the merchant's ("Dropbox by Adyen", "Simon Levelt BV via Mollie"), never by the IBAN. Such a match is `uncertain`, so it's never in the confident table. Leave off IBANs where the counterparty name doesn't name the merchant, such as Tikkie's.
+Then ask Claude to relearn the payment providers. When a learned IBAN suddenly shows another party's name, the proposal hints it may be a provider.
 
-After adding an IBAN, ask Claude to relearn the payment providers. `relearn_providers` reads the history booked on the listed IBANs, removes the entries under them (which mix merchants), and learns each booking again under its merchant, the latest choice winning. It writes only `data/suggestions.yaml` and is safe to run again. In a fresh setup, seed first, then list the IBANs and relearn.
-
-Providers open new IBANs now and then. When a transaction arrives on a learned IBAN that isn't listed, under a name that looks like another party's (the entry was learned as "Spotify AB", the transaction is from "KLM"), its proposal carries a hint that the IBAN may be a payment provider. The proposal itself is unchanged. One counterparty spelled several ways ("AXUS NEDERLAND N.V.", "Axus Nederland BV") gets no hint, and neither does a name that only shares the provider's ("… by Adyen"). If the hint is right, list the IBAN and relearn; if not, ignore it.
-
-Comments in `data/suggestions.yaml` are lost whenever the tool saves it, so keep notes about which provider an IBAN is somewhere else.
+Comments in `data/suggestions.yaml` are lost when the tool saves it.
 
 ### Refresh the session
 
-Hamurai sessions last about a day. When a tool says the session has expired, paste a fresh `Authorization` cookie value into `.env` and reconnect the server from `/mcp`. Lines a `book` call did not get to are listed as `not_tried`; ask Claude to book them again after reconnecting.
+Sessions last about a day. When one expires, paste a fresh `Authorization` cookie into `.env`, reconnect from `/mcp`, and ask Claude to book any `not_tried` lines again.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgements
+
+- [Rick and Morty](https://www.imdb.com/title/tt2861424/)
+- [Model Context Protocol](https://modelcontextprotocol.io)
